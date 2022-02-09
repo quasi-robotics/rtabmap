@@ -3225,6 +3225,10 @@ bool Rtabmap::process(
 						UDEBUG("  to %s", newT.prettyPrint().c_str());
 						iter->second.setTransform(newT);
 
+						// Update link in the referred signatures
+						if(iter->first > 0)
+							_memory->updateLink(iter->second, false);
+
 						_odomCacheConstraints.insert(std::make_pair(signature->id(), iter->second));
 					}
 					_odomCacheConstraints.insert(selfLinks.begin(), selfLinks.end());
@@ -3792,6 +3796,13 @@ bool Rtabmap::process(
 	if(!_rawDataKept)
 	{
 		_memory->removeRawData(signature->id(), true, !_neighborLinkRefining && !_proximityBySpace, true);
+	}
+
+	// Localization mode and saving localization data: save odometry covariance in a prior link
+	// so that DBReader can republish the covariance of localization data
+	if(!_memory->isIncremental() && _memory->isLocalizationDataSaved() && !odomCovariance.empty())
+	{
+		_memory->addLink(Link(signature->id(), signature->id(), Link::kPosePrior, odomPose, odomCovariance.inv()));
 	}
 
 	// remove last signature if the memory is not incremental or is a bad signature (if bad signatures are ignored)
