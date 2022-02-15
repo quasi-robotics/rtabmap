@@ -53,6 +53,10 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <rtabmap/utilite/UMath.h>
 #include <rtabmap/utilite/UProcessInfo.h>
 
+#ifdef RTABMAP_PYTHON
+#include "rtabmap/core/PythonInterface.h"
+#endif
+
 #include <pcl/search/kdtree.h>
 #include <pcl/filters/crop_box.h>
 #include <pcl/io/pcd_io.h>
@@ -161,6 +165,9 @@ Rtabmap::Rtabmap() :
 	_pathTransformToGoal(Transform::getIdentity()),
 	_pathStuckCount(0),
 	_pathStuckDistance(0.0f)
+#ifdef RTABMAP_PYTHON
+	,_python(new PythonInterface())
+#endif
 {
 }
 
@@ -1038,23 +1045,32 @@ void Rtabmap::resetMemory()
 class NearestPathKey
 {
 public:
-	NearestPathKey(float l, int i) :
+	NearestPathKey(float l, int i, float d) :
 		likelihood(l),
-		id(i){}
+		id(i),
+		distance(d){}
 	bool operator<(const NearestPathKey & k) const
 	{
 		if(likelihood < k.likelihood)
 		{
 			return true;
 		}
-		else if(likelihood == k.likelihood && id < k.id)
+		else if(likelihood == k.likelihood)
 		{
-			return true;
+			if(distance > k.distance)
+			{
+				return true;
+			}
+			else if(distance == k.distance && id < k.id)
+			{
+				return true;
+			}
 		}
 		return false;
 	}
 	float likelihood;
 	int id;
+	float distance;
 };
 
 //============================================================
@@ -1952,6 +1968,11 @@ bool Rtabmap::process(
 	else if(!signature->isBadSignature() && (smallDisplacement || tooFastMovement))
 	{
 		_highestHypothesis = lastHighestHypothesis;
+		UDEBUG("smallDisplacement=%d tooFastMovement=%d", smallDisplacement?1:0, tooFastMovement?1:0);
+	}
+	else
+	{
+		UDEBUG("Ignoring likelihood and loop closure hypotheses as current signature doesn't have enough visual features.");
 	}
 
 	//============================================================
@@ -2349,23 +2370,6 @@ bool Rtabmap::process(
 	}
 
 	//============================================================
-	// Landmark
-	//============================================================
-	std::map<int, std::set<int> > landmarksDetected; // <Landmark ID, list of nodes that saw this landmark>
-	if(!signature->getLandmarks().empty())
-	{
-		for(std::map<int, Link>::const_iterator iter=signature->getLandmarks().begin(); iter!=signature->getLandmarks().end(); ++iter)
-		{
-			if(uContains(_memory->getLandmarksIndex(), iter->first) &&
-					_memory->getLandmarksIndex().find(iter->first)->second.size()>1)
-			{
-				UINFO("Landmark %d observed again! Seen the first time by node %d.", -iter->first, *_memory->getLandmarksIndex().find(iter->first)->second.begin());
-				landmarksDetected.insert(std::make_pair(iter->first, _memory->getLandmarksIndex().find(iter->first)->second));
-			}
-		}
-	}
-
-	//============================================================
 	// Proximity detections
 	//============================================================
 	std::list<std::pair<int, int> > loopClosureLinksAdded;
@@ -2446,21 +2450,25 @@ bool Rtabmap::process(
 				UDEBUG("got %d paths", (int)nearestPathsNotSorted.size());
 				// sort nearest paths by highest likelihood (if two have same likelihood, sort by id)
 				std::map<NearestPathKey, std::map<int, Transform> > nearestPaths;
+				Transform currentPoseInv = _optimizedPoses.at(signature->id());
 				for(std::map<int, std::map<int, Transform> >::const_iterator iter=nearestPathsNotSorted.begin();iter!=nearestPathsNotSorted.end(); ++iter)
 				{
 					const std::map<int, Transform> & path = iter->second;
 					float highestLikelihood = 0.0f;
 					int highestLikelihoodId = iter->first;
+					float smallestDistanceSqr = -1;
 					for(std::map<int, Transform>::const_iterator jter=path.begin(); jter!=path.end(); ++jter)
 					{
 						float v = uValue(likelihood, jter->first, 0.0f);
-						if(v > highestLikelihood)
+						float distance = (currentPoseInv * jter->second).getNormSquared();
+						if(v > highestLikelihood || (v == highestLikelihood && (smallestDistanceSqr < 0 || distance < smallestDistanceSqr)))
 						{
 							highestLikelihood = v;
 							highestLikelihoodId = jter->first;
+							smallestDistanceSqr = distance;
 						}
 					}
-					nearestPaths.insert(std::make_pair(NearestPathKey(highestLikelihood, highestLikelihoodId), path));
+					nearestPaths.insert(std::make_pair(NearestPathKey(highestLikelihood, highestLikelihoodId, smallestDistanceSqr), path));
 				}
 				UDEBUG("nearestPaths=%d proximityMaxPaths=%d", (int)nearestPaths.size(), _proximityMaxPaths);
 
@@ -2833,6 +2841,41 @@ bool Rtabmap::process(
 	ULOGGER_INFO("timeAddLoopClosureLink=%fs", timeAddLoopClosureLink);
 
 	//============================================================
+	// Landmark
+	//============================================================
+	std::map<int, std::set<int> > landmarksDetected; // <Landmark ID, list of nodes that saw this landmark>
+	if(!signature->getLandmarks().empty())
+	{
+		bool hasGlobalLoopClosuresInOdomCache = !graph::filterLinks(_odomCacheConstraints, Link::kGlobalClosure, true).empty() || _loopClosureHypothesis.first != 0;
+		UDEBUG("hasGlobalLoopClosuresInOdomCache=%d", hasGlobalLoopClosuresInOdomCache?1:0);
+		for(std::map<int, Link>::const_iterator iter=signature->getLandmarks().begin(); iter!=signature->getLandmarks().end(); ++iter)
+		{
+			if(uContains(_memory->getLandmarksIndex(), iter->first) &&
+					_memory->getLandmarksIndex().find(iter->first)->second.size()>1)
+			{
+				if(!_memory->isIncremental() &&          // In localization mode
+					!hasGlobalLoopClosuresInOdomCache && // If there are global loop closures in odom cache, we can keep far landmarks
+					_localRadius>0.0 &&
+					iter->second.transform().getNormSquared() > _localRadius*_localRadius)
+				{
+					// Ignore landmark detections over local radius
+					UWARN("Ignoring landmark %d for localization as it is too far (%fm > %s=%f) "
+							"and odom cache doesn't contain global loop closure(s).",
+							iter->first,
+							iter->second.transform().getNorm(),
+							Parameters::kRGBDLocalRadius().c_str(),
+							_localRadius);
+				}
+				else
+				{
+					UINFO("Landmark %d observed again! Seen the first time by node %d.", -iter->first, *_memory->getLandmarksIndex().find(iter->first)->second.begin());
+					landmarksDetected.insert(std::make_pair(iter->first, _memory->getLandmarksIndex().find(iter->first)->second));
+				}
+			}
+		}
+	}
+
+	//============================================================
 	// Add virtual links if a path is activated
 	//============================================================
 	if(_path.size())
@@ -3064,7 +3107,7 @@ bool Rtabmap::process(
 				}
 
 				bool hasGlobalLoopClosuresOrLandmarks = false;
-				if(rejectLocalization)
+				if(rejectLocalization && !graph::filterLinks(constraints, Link::kLocalSpaceClosure, true).empty())
 				{
 					// Let's try again without local loop closures
 					localizationLinks = graph::filterLinks(localizationLinks, Link::kLocalSpaceClosure);
