@@ -591,13 +591,6 @@ void Rtabmap::parseParameters(const ParametersMap & parameters)
 		_optimizeFromGraphEndChanged = true;
 	}
 	Parameters::parse(parameters, Parameters::kRGBDOptimizeMaxError(), _optimizationMaxError);
-	if(_optimizationMaxError > 0.0 && _optimizationMaxError < 1.0)
-	{
-		UWARN("RGBD/OptimizeMaxError (value=%f) is smaller than 1.0, setting to default %f "
-			  "instead (for backward compatibility issues when this parameter was previously "
-			  "an absolute error value).", _optimizationMaxError, Parameters::defaultRGBDOptimizeMaxError());
-		_optimizationMaxError = Parameters::defaultRGBDOptimizeMaxError();
-	}
 	Parameters::parse(parameters, Parameters::kRtabmapStartNewMapOnLoopClosure(), _startNewMapOnLoopClosure);
 	Parameters::parse(parameters, Parameters::kRtabmapStartNewMapOnGoodSignature(), _startNewMapOnGoodSignature);
 	Parameters::parse(parameters, Parameters::kRGBDGoalReachedRadius(), _goalReachedRadius);
@@ -1444,7 +1437,8 @@ bool Rtabmap::process(
 			signature->getLinks().size() &&
 			signature->getLinks().begin()->second.type() == Link::kNeighbor &&
 		   _memory->isIncremental() && // ignore pose matching in localization mode
-		   rehearsedId == 0) // don't do it if rehearsal happened
+		   rehearsedId == 0 && // don't do it if rehearsal happened
+		   !tooFastMovement) // ignore if too fast movement has been detected
 		{
 			int oldId = signature->getLinks().begin()->first;
 			const Signature * oldS = _memory->getSignature(oldId);
