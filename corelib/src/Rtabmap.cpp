@@ -604,6 +604,44 @@ void Rtabmap::parseParameters(const ParametersMap & parameters)
 	Parameters::parse(parameters, Parameters::kRGBDMaxOdomCacheSize(), _maxOdomCacheSize);
 	Parameters::parse(parameters, Parameters::kRGBDProximityGlobalScanMap(), _createGlobalScanMap);
 
+	Parameters::parse(parameters, Parameters::kMarkerPriorsVarianceLinear(), _markerPriorsLinearVariance);
+	UASSERT(_markerPriorsLinearVariance>0.0f);
+	Parameters::parse(parameters, Parameters::kMarkerPriorsVarianceAngular(), _markerPriorsAngularVariance);
+	UASSERT(_markerPriorsAngularVariance>0.0f);
+	std::string markerPriorsStr;
+	if(Parameters::parse(parameters, Parameters::kMarkerPriors(), markerPriorsStr))
+	{
+		_markerPriors.clear();
+		std::list<std::string> strList = uSplit(markerPriorsStr, '|');
+		for(std::list<std::string>::iterator iter=strList.begin(); iter!=strList.end(); ++iter)
+		{
+			std::string markerStr = *iter;
+			while(!markerStr.empty() && !uIsDigit(markerStr[0]))
+			{
+				markerStr.erase(markerStr.begin());
+			}
+			if(!markerStr.empty())
+			{
+				std::string idStr = uSplitNumChar(markerStr).front();
+				int id = uStr2Int(idStr);
+				Transform prior = Transform::fromString(markerStr.substr(idStr.size()));
+				if(!prior.isNull() && id>0)
+				{
+					_markerPriors.insert(std::make_pair(-id, prior));
+					UDEBUG("Added landmark prior %d: %s", id, prior.prettyPrint().c_str());
+				}
+				else
+				{
+					UERROR("Failed to parse element \"%s\" in parameter %s", markerStr.c_str(), Parameters::kMarkerPriors().c_str());
+				}
+			}
+			else if(!iter->empty())
+			{
+				UERROR("Failed to parse parameter %s, value=\"%s\"", Parameters::kMarkerPriors().c_str(), iter->c_str());
+			}
+		}
+	}
+
 	UASSERT(_rgbdLinearUpdate >= 0.0f);
 	UASSERT(_rgbdAngularUpdate >= 0.0f);
 	UASSERT(_rgbdLinearSpeedUpdate >= 0.0f);
@@ -1375,6 +1413,7 @@ bool Rtabmap::process(
 	bool tooFastMovement = false;
 	std::list<int> signaturesRemoved;
 	bool neighborLinkRefined = false;
+	bool addedNewLandmark = false;
 	if(_rgbdSlamMode)
 	{
 		statistics_.addStatistic(Statistics::kMemoryOdometry_variance_lin(), odomCovariance.empty()?1.0f:(float)odomCovariance.at<double>(0,0));
@@ -1553,6 +1592,8 @@ bool Rtabmap::process(
 				if(_optimizedPoses.find(iter->first) == _optimizedPoses.end())
 				{
 					_optimizedPoses.insert(std::make_pair(iter->first, newPose*iter->second.transform()));
+					UDEBUG("Added landmark %d : %s", iter->first, (newPose*iter->second.transform()).prettyPrint().c_str());
+					addedNewLandmark = true;
 				}
 				_constraints.insert(std::make_pair(iter->first, iter->second.inverse()));
 			}
@@ -3777,6 +3818,8 @@ bool Rtabmap::process(
 			statistics_.addStatistic(Statistics::kMemorySmall_movement(), smallDisplacement?1.0f:0);
 			statistics_.addStatistic(Statistics::kMemoryDistance_travelled(), _distanceTravelled);
 			statistics_.addStatistic(Statistics::kMemoryFast_movement(), tooFastMovement?1.0f:0);
+			statistics_.addStatistic(Statistics::kMemoryNew_landmark(), addedNewLandmark?1.0f:0);
+
 			if(_publishRAMUsage)
 			{
 				UTimer ramTimer;
@@ -3875,7 +3918,11 @@ bool Rtabmap::process(
 			signaturesRemoved.push_back(signature->id());
 			_memory->deleteLocation(signature->id());
 		}
-		else if((smallDisplacement || tooFastMovement) && _loopClosureHypothesis.first == 0 && lastProximitySpaceClosureId == 0)
+		else if((smallDisplacement || tooFastMovement) &&
+				_loopClosureHypothesis.first == 0 &&
+				lastProximitySpaceClosureId == 0 &&
+				(rejectedLandmark || landmarksDetected.empty()) &&
+				!addedNewLandmark)
 		{
 			// Don't delete the location if a loop closure is detected
 			UINFO("Ignoring location %d because the displacement is too small! (d=%f a=%f)",
@@ -3892,7 +3939,8 @@ bool Rtabmap::process(
 	else if(!_memory->isIncremental() &&
 			(smallDisplacement || tooFastMovement) &&
 			_loopClosureHypothesis.first == 0 &&
-			lastProximitySpaceClosureId == 0)
+			lastProximitySpaceClosureId == 0 &&
+			(rejectedLandmark || landmarksDetected.empty()))
 	{
 		_odomCachePoses.erase(signatureRemoved);
 		_odomCacheConstraints.erase(signatureRemoved);
@@ -4728,6 +4776,20 @@ std::map<int, Transform> Rtabmap::optimizeGraph(
 	UDEBUG("ids=%d", (int)ids.size());
 	_memory->getMetricConstraints(ids, poses, edgeConstraints, lookInDatabase, !_graphOptimizer->landmarksIgnored());
 	UINFO("get constraints (ids=%d, %d poses, %d edges) time %f s", (int)ids.size(), (int)poses.size(), (int)edgeConstraints.size(), timer.ticks());
+
+	// add landmark priors if there are some
+	for(std::map<int, Transform>::iterator iter=poses.begin(); iter!=poses.end() && iter->first < 0; ++iter)
+	{
+		if(_markerPriors.find(iter->first) != _markerPriors.end())
+		{
+			cv::Mat infMatrix = cv::Mat::eye(6, 6, CV_64FC1);
+			infMatrix(cv::Range(0,3), cv::Range(0,3)) /= _markerPriorsLinearVariance;
+			infMatrix(cv::Range(3,6), cv::Range(3,6)) /= _markerPriorsAngularVariance;
+			edgeConstraints.insert(std::make_pair(iter->first, Link(iter->first, iter->first, Link::kPosePrior, _markerPriors.at(iter->first), infMatrix)));
+			UDEBUG("Added prior %d : %s (variance: lin=%f ang=%f)", iter->first, _markerPriors.at(iter->first).prettyPrint().c_str(),
+					_markerPriorsLinearVariance, _markerPriorsAngularVariance);
+		}
+	}
 
 	if(_graphOptimizer->iterations() > 0)
 	{
