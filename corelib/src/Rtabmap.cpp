@@ -1434,30 +1434,43 @@ bool Rtabmap::process(
 				//============================================================
 				// Minimum displacement required to add to Memory
 				//============================================================
-				const std::multimap<int, Link> & links = signature->getLinks();
-				if(links.size() && links.begin()->second.type() == Link::kNeighbor)
+				Transform t;
+
+				if(_memory->isIncremental())
 				{
-					const Signature * s = _memory->getSignature(links.begin()->second.to());
-					UASSERT(s!=0);
-					// don't filter if the new node is not intermediate but previous one is
-					if(signature->getWeight() < 0 || s->getWeight() >= 0)
+					const std::multimap<int, Link> & links = signature->getLinks();
+					if(links.size() && links.begin()->second.type() == Link::kNeighbor)
 					{
-						float x,y,z, roll,pitch,yaw;
-						links.begin()->second.transform().getTranslationAndEulerAngles(x,y,z, roll,pitch,yaw);
-						bool isMoving = fabs(x) > _rgbdLinearUpdate ||
-										fabs(y) > _rgbdLinearUpdate ||
-										fabs(z) > _rgbdLinearUpdate ||
-									    (_rgbdAngularUpdate>0.0f && (
-											fabs(roll) > _rgbdAngularUpdate ||
-											fabs(pitch) > _rgbdAngularUpdate ||
-											fabs(yaw) > _rgbdAngularUpdate));
-						if(!isMoving)
+						const Signature * s = _memory->getSignature(links.begin()->second.to());
+						UASSERT(s!=0);
+						// don't filter if the new node is not intermediate but previous one is
+						if(signature->getWeight() < 0 || s->getWeight() >= 0)
 						{
-							// This will disable global loop closure detection, only retrieval will be done.
-							// The location will also be deleted at the end.
-							smallDisplacement = true;
-							UDEBUG("smallDisplacement: %f %f %f %f %f %f", x,y,z, roll,pitch,yaw);
+							t = links.begin()->second.transform();
 						}
+					}
+				}
+				else if(!_odomCachePoses.empty())
+				{
+					t = _odomCachePoses.rbegin()->second.inverse() * signature->getPose();
+				}
+				if(!t.isNull())
+				{
+					float x,y,z, roll,pitch,yaw;
+					t.getTranslationAndEulerAngles(x,y,z, roll,pitch,yaw);
+					bool isMoving = fabs(x) > _rgbdLinearUpdate ||
+									fabs(y) > _rgbdLinearUpdate ||
+									fabs(z) > _rgbdLinearUpdate ||
+									(_rgbdAngularUpdate>0.0f && (
+										fabs(roll) > _rgbdAngularUpdate ||
+										fabs(pitch) > _rgbdAngularUpdate ||
+										fabs(yaw) > _rgbdAngularUpdate));
+					if(!isMoving)
+					{
+						// This will disable global loop closure detection, only retrieval will be done.
+						// The location will also be deleted at the end.
+						smallDisplacement = true;
+						UDEBUG("smallDisplacement: %f %f %f %f %f %f", x,y,z, roll,pitch,yaw);
 					}
 				}
 			}
@@ -2907,6 +2920,7 @@ bool Rtabmap::process(
 				{
 					UINFO("Landmark %d observed again! Seen the first time by node %d.", -iter->first, *_memory->getLandmarksIndex().find(iter->first)->second.begin());
 					landmarksDetected.insert(std::make_pair(iter->first, _memory->getLandmarksIndex().find(iter->first)->second));
+					rejectedGlobalLoopClosure = false; // If it was true, it will be set back to false if landmarks are rejected on graph optimization
 				}
 			}
 		}
@@ -2950,6 +2964,7 @@ bool Rtabmap::process(
 	cv::Mat localizationCovariance;
 	Transform previousMapCorrection;
 	bool rejectedLandmark = false;
+	bool delayedLocalization = false;
 	UDEBUG("RGB-D SLAM mode: %d", _rgbdSlamMode?1:0);
 	UDEBUG("Incremental: %d", _memory->isIncremental());
 	UDEBUG("Loop hyp: %d", _loopClosureHypothesis.first);
@@ -3440,6 +3455,7 @@ bool Rtabmap::process(
 					else //delayed localization (wait for more than 1 link)
 					{
 						UWARN("Localization was good, but waiting for another one to be more accurate (%s>0)", Parameters::kRGBDMaxOdomCacheSize().c_str());
+						delayedLocalization = true;
 						rejectLocalization = true;
 					}
 				}
@@ -3953,10 +3969,21 @@ bool Rtabmap::process(
 			(smallDisplacement || tooFastMovement) &&
 			_loopClosureHypothesis.first == 0 &&
 			lastProximitySpaceClosureId == 0 &&
+			!delayedLocalization &&
 			(rejectedLandmark || landmarksDetected.empty()))
 	{
 		_odomCachePoses.erase(signatureRemoved);
-		_odomCacheConstraints.erase(signatureRemoved);
+		for(std::multimap<int, Link>::iterator iter=_odomCacheConstraints.begin(); iter!=_odomCacheConstraints.end();)
+		{
+			if(iter->second.from() == signatureRemoved || iter->second.to() == signatureRemoved)
+			{
+				_odomCacheConstraints.erase(iter++);
+			}
+			else
+			{
+				++iter;
+			}
+		}
 	}
 
 	// Pass this point signature should not be used, since it could have been transferred...
@@ -4830,7 +4857,7 @@ std::map<int, Transform> Rtabmap::optimizeGraph(
 	}
 	else
 	{
-		bool hasLandmarks = edgeConstraints.begin()->first < 0;
+		bool hasLandmarks = !edgeConstraints.empty() && edgeConstraints.begin()->first < 0;
 		if(poses.size() != guessPoses.size() || hasLandmarks)
 		{
 			UDEBUG("recompute poses using only links (robust to multi-session)");
