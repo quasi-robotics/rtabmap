@@ -1830,7 +1830,6 @@ void DatabaseViewer::updateIds()
 		previousPose=p;
 
 		//links
-		bool addPose = links.find(ids_[i]) == links.end();
 		for(std::multimap<int, Link>::iterator jter=links.find(ids_[i]); jter!=links.end() && jter->first == ids_[i]; ++jter)
 		{
 			if(jter->second.type() == Link::kNeighborMerged)
@@ -1856,34 +1855,27 @@ void DatabaseViewer::updateIds()
 				{
 					links_.insert(std::make_pair(ids_[i], jter->second));
 				}
-				addPose = true;
-			}
-			else if(graph::findLink(links_, jter->second.from(), jter->second.to()) != links_.end())
-			{
-				addPose = true;
 			}
 		}
-		if(addPose)
+		// Add pose
+		odomPoses_.insert(std::make_pair(ids_[i], p));
+		if(!g.isNull())
 		{
-			odomPoses_.insert(std::make_pair(ids_[i], p));
-			if(!g.isNull())
-			{
-				groundTruthPoses_.insert(std::make_pair(ids_[i], g));
-			}
-			if(gps.stamp() > 0.0)
-			{
-				gpsValues_.insert(std::make_pair(ids_[i], gps));
+			groundTruthPoses_.insert(std::make_pair(ids_[i], g));
+		}
+		if(gps.stamp() > 0.0)
+		{
+			gpsValues_.insert(std::make_pair(ids_[i], gps));
 
-				cv::Point3f p(0.0f,0.0f,0.0f);
-				if(!gpsPoses_.empty())
-				{
-					GeodeticCoords coords = gps.toGeodeticCoords();
-					GPS originGPS = gpsValues_.begin()->second;
-					p = coords.toENU_WGS84(originGPS.toGeodeticCoords());
-				}
-				Transform pose(p.x, p.y, p.z, 0.0f, 0.0f, (float)((-(gps.bearing()-90))*M_PI/180.0));
-				gpsPoses_.insert(std::make_pair(ids_[i], pose));
+			cv::Point3f p(0.0f,0.0f,0.0f);
+			if(!gpsPoses_.empty())
+			{
+				GeodeticCoords coords = gps.toGeodeticCoords();
+				GPS originGPS = gpsValues_.begin()->second;
+				p = coords.toENU_WGS84(originGPS.toGeodeticCoords());
 			}
+			Transform pose(p.x, p.y, p.z, 0.0f, 0.0f, (float)((-(gps.bearing()-90))*M_PI/180.0));
+			gpsPoses_.insert(std::make_pair(ids_[i], pose));
 		}
 	}
 
@@ -4381,10 +4373,12 @@ void DatabaseViewer::sliderAValueChanged(int value)
 			ui_->label_idA,
 			ui_->label_mapA,
 			ui_->label_poseA,
+			ui_->label_optposeA,
 			ui_->label_velA,
 			ui_->label_calibA,
 			ui_->label_scanA,
 			ui_->label_gravityA,
+			ui_->label_priorA,
 			ui_->label_gpsA,
 			ui_->label_gtA,
 			ui_->label_sensorsA,
@@ -4404,10 +4398,12 @@ void DatabaseViewer::sliderBValueChanged(int value)
 			ui_->label_idB,
 			ui_->label_mapB,
 			ui_->label_poseB,
+			ui_->label_optposeB,
 			ui_->label_velB,
 			ui_->label_calibB,
 			ui_->label_scanB,
 			ui_->label_gravityB,
+			ui_->label_priorB,
 			ui_->label_gpsB,
 			ui_->label_gtB,
 			ui_->label_sensorsB,
@@ -4425,10 +4421,12 @@ void DatabaseViewer::update(int value,
 						QLabel * labelId,
 						QLabel * labelMapId,
 						QLabel * labelPose,
+						QLabel * labelOptPose,
 						QLabel * labelVelocity,
 						QLabel * labelCalib,
 						QLabel * labelScan,
 						QLabel * labelGravity,
+						QLabel * labelPrior,
 						QLabel * labelGps,
 						QLabel * labelGt,
 						QLabel * labelSensors,
@@ -4444,11 +4442,13 @@ void DatabaseViewer::update(int value,
 	label->clear();
 	labelMapId->clear();
 	labelPose->clear();
+	labelOptPose->clear();
 	labelVelocity->clear();
 	stamp->clear();
 	labelCalib->clear();
 	labelScan ->clear();
 	labelGravity->clear();
+	labelPrior->clear();
 	labelGps->clear();
 	labelGt->clear();
 	labelSensors->clear();
@@ -4553,9 +4553,17 @@ void DatabaseViewer::update(int value,
 				float x,y,z,roll,pitch,yaw;
 				odomPose.getTranslationAndEulerAngles(x,y,z,roll, pitch,yaw);
 				labelPose->setText(QString("%1xyz=(%2,%3,%4)\nrpy=(%5,%6,%7)").arg(odomPose.isIdentity()?"* ":"").arg(x).arg(y).arg(z).arg(roll).arg(pitch).arg(yaw));
-				if(odomPoses_.size() && odomPoses_.find(id) == odomPoses_.end())
+				if(graphes_.size())
 				{
-					labelPose->setText(labelPose->text() + "\n<Not in graph>");
+					if(graphes_.back().find(id) == graphes_.back().end())
+					{
+						labelOptPose->setText("<Not in optimized graph>");
+					}
+					else
+					{
+						graphes_.back().find(id)->second.getTranslationAndEulerAngles(x,y,z,roll, pitch,yaw);
+						labelOptPose->setText(QString("xyz=(%1,%2,%3)\nrpy=(%4,%5,%6)").arg(x).arg(y).arg(z).arg(roll).arg(pitch).arg(yaw));
+					}
 				}
 				if(s!=0.0)
 				{
@@ -4576,6 +4584,17 @@ void DatabaseViewer::update(int value,
 					Eigen::Vector3d v = Transform(0,0,0,roll,pitch,0).toEigen3d() * -Eigen::Vector3d::UnitZ();
 					labelGravity->setText(QString("x=%1 y=%2 z=%3").arg(v[0]).arg(v[1]).arg(v[2]));
 					labelGravity->setToolTip(QString("roll=%1 pitch=%2 yaw=%3").arg(roll).arg(pitch).arg(yaw));
+				}
+
+				std::multimap<int, Link> priorLink;
+				dbDriver_->loadLinks(id, priorLink, Link::kPosePrior);
+				if(!priorLink.empty())
+				{
+					priorLink.begin()->second.transform().getTranslationAndEulerAngles(x,y,z,roll, pitch,yaw);
+					labelPrior->setText(QString("xyz=(%1,%2,%3)\nrpy=(%4,%5,%6)").arg(x).arg(y).arg(z).arg(roll).arg(pitch).arg(yaw));
+					std::stringstream out;
+					out << priorLink.begin()->second.infMatrix().inv();
+					labelPrior->setToolTip(QString("%1").arg(out.str().c_str()));
 				}
 
 				if(gps.stamp()>0.0)
@@ -5609,28 +5628,21 @@ void DatabaseViewer::updateWordsMatching(const std::vector<int> & inliers)
 					float scaleAX = ui_->graphicsView_A->viewScale();
 					float scaleBX = ui_->graphicsView_B->viewScale();
 
-					float scaleDiff = ui_->graphicsView_A->viewScale() / ui_->graphicsView_B->viewScale();
-					float deltaAX = 0;
-					float deltaAY = 0;
+					float marginAX = (ui_->graphicsView_A->width()   - ui_->graphicsView_A->sceneRect().width()*scaleAX)/2.0f;
+					float marginAY = (ui_->graphicsView_A->height()  - ui_->graphicsView_A->sceneRect().height()*scaleAX)/2.0f;
+					float marginBX   = (ui_->graphicsView_B->width()   - ui_->graphicsView_B->sceneRect().width()*scaleBX)/2.0f;
+					float marginBY   = (ui_->graphicsView_B->height()  - ui_->graphicsView_B->sceneRect().height()*scaleBX)/2.0f;
+
+					float deltaX = 0;
+					float deltaY = 0;
 
 					if(ui_->actionVertical_Layout->isChecked())
 					{
-						deltaAY = ui_->graphicsView_A->height()/scaleAX;
+						deltaY = ui_->graphicsView_A->height();
 					}
 					else
 					{
-						deltaAX = ui_->graphicsView_A->width()/scaleAX;
-					}
-					float deltaBX = 0;
-					float deltaBY = 0;
-
-					if(ui_->actionVertical_Layout->isChecked())
-					{
-						deltaBY = ui_->graphicsView_B->height()/scaleBX;
-					}
-					else
-					{
-						deltaBX = ui_->graphicsView_A->width()/scaleBX;
+						deltaX = ui_->graphicsView_A->width();
 					}
 
 					const KeypointItem * kptA = wordsA.value(ids[i]);
@@ -5652,17 +5664,17 @@ void DatabaseViewer::updateWordsMatching(const std::vector<int> & inliers)
 					}
 
 					ui_->graphicsView_A->addLine(
-							kptA->rect().x()+kptA->rect().width()/2,
-							kptA->rect().y()+kptA->rect().height()/2,
-							kptB->rect().x()/scaleDiff+kptB->rect().width()/scaleDiff/2+deltaAX,
-							kptB->rect().y()/scaleDiff+kptB->rect().height()/scaleDiff/2+deltaAY,
+							kptA->keypoint().pt.x,
+							kptA->keypoint().pt.y,
+							(kptB->keypoint().pt.x*scaleBX+marginBX+deltaX-marginAX)/scaleAX,
+							(kptB->keypoint().pt.y*scaleBX+marginBY+deltaY-marginAY)/scaleAX,
 							cA);
 
 					ui_->graphicsView_B->addLine(
-							kptA->rect().x()*scaleDiff+kptA->rect().width()*scaleDiff/2-deltaBX,
-							kptA->rect().y()*scaleDiff+kptA->rect().height()*scaleDiff/2-deltaBY,
-							kptB->rect().x()+kptB->rect().width()/2,
-							kptB->rect().y()+kptB->rect().height()/2,
+							(kptA->keypoint().pt.x*scaleAX+marginAX-deltaX-marginBX)/scaleBX,
+							(kptA->keypoint().pt.y*scaleAX+marginAY-deltaY-marginBY)/scaleBX,
+							kptB->keypoint().pt.x,
+							kptB->keypoint().pt.y,
 							cB);
 				}
 			}
@@ -5981,10 +5993,12 @@ void DatabaseViewer::updateConstraintView(
 						ui_->label_idA,
 						ui_->label_mapA,
 						ui_->label_poseA,
+						ui_->label_optposeA,
 						ui_->label_velA,
 						ui_->label_calibA,
 						ui_->label_scanA,
 						ui_->label_gravityA,
+						ui_->label_priorA,
 						ui_->label_gpsA,
 						ui_->label_gtA,
 						ui_->label_sensorsA,
@@ -6002,10 +6016,12 @@ void DatabaseViewer::updateConstraintView(
 						ui_->label_idB,
 						ui_->label_mapB,
 						ui_->label_poseB,
+						ui_->label_optposeB,
 						ui_->label_velB,
 						ui_->label_calibB,
 						ui_->label_scanB,
 						ui_->label_gravityB,
+						ui_->label_priorB,
 						ui_->label_gpsB,
 						ui_->label_gtB,
 						ui_->label_sensorsB,
@@ -6524,6 +6540,17 @@ void DatabaseViewer::updateConstraintButtons()
 				containsLink(linksRemoved_, from ,to))
 			{
 				ui_->pushButton_add->setEnabled(true);
+			}
+		}
+		else if(ui_->checkBox_enableForAll->isChecked())
+		{
+			if(odomPoses_.find(from) == odomPoses_.end())
+			{
+				UWARN("Button \"Add\" cannot be enabled even if \"all\" checkbox is checked, as node %d doesn't have odometry set.", from);
+			}
+			else if(odomPoses_.find(to) == odomPoses_.end())
+			{
+				UWARN("Button \"Add\" cannot be enabled even if \"all\" checkbox is checked, as node %d doesn't have odometry set.", to);
 			}
 		}
 
@@ -8237,7 +8264,18 @@ bool DatabaseViewer::addConstraint(int from, int to, bool silent)
 			}
 		}
 
-		t = reg->computeTransformationMod(*fromS, *toS, guess, &info);
+		if(switchedIds)
+		{
+			t = reg->computeTransformationMod(*toS, *fromS, guess.isNull()?guess:guess.inverse(), &info);
+			if(!t.isNull())
+			{
+				t = t.inverse();
+			}
+		}
+		else
+		{
+			t = reg->computeTransformationMod(*fromS, *toS, guess, &info);
+		}
 		delete reg;
 		UDEBUG("");
 
