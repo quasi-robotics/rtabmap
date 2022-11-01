@@ -452,7 +452,8 @@ MainWindow::MainWindow(PreferencesDialog * prefDialog, QWidget * parent, bool sh
 	connect(_ui->actionStereoUsb, SIGNAL(triggered()), this, SLOT(selectStereoUsb()));
 	connect(_ui->actionRealSense2_T265, SIGNAL(triggered()), this, SLOT(selectRealSense2Stereo()));
 	connect(_ui->actionMYNT_EYE_S_SDK, SIGNAL(triggered()), this, SLOT(selectMyntEyeS()));
-	connect(_ui->actionDepthAI, SIGNAL(triggered()), this, SLOT(selectDepthAI()));
+	connect(_ui->actionDepthAI_oakd, SIGNAL(triggered()), this, SLOT(selectDepthAIOAKD()));
+	connect(_ui->actionDepthAI_oakdlite, SIGNAL(triggered()), this, SLOT(selectDepthAIOAKDLite()));
 	_ui->actionFreenect->setEnabled(CameraFreenect::available());
 	_ui->actionOpenNI_CV->setEnabled(CameraOpenNICV::available());
 	_ui->actionOpenNI_CV_ASUS->setEnabled(CameraOpenNICV::available());
@@ -475,7 +476,8 @@ MainWindow::MainWindow(PreferencesDialog * prefDialog, QWidget * parent, bool sh
 	_ui->actionZed_Open_Capture->setEnabled(CameraStereoZedOC::available());
     _ui->actionStereoTara->setEnabled(CameraStereoTara::available());
     _ui->actionMYNT_EYE_S_SDK->setEnabled(CameraMyntEye::available());
-    _ui->actionDepthAI->setEnabled(CameraDepthAI::available());
+    _ui->actionDepthAI_oakd->setEnabled(CameraDepthAI::available());
+    _ui->actionDepthAI_oakdlite->setEnabled(CameraDepthAI::available());
 	this->updateSelectSourceMenu();
 
 	connect(_ui->actionPreferences, SIGNAL(triggered()), this, SLOT(openPreferences()));
@@ -1995,6 +1997,39 @@ void MainWindow::processStats(const rtabmap::Statistics & stat)
 			}
 		}
 
+		// Add data
+		for(std::map<int, Signature>::const_iterator iter = stat.getSignaturesData().begin();
+			iter!=stat.getSignaturesData().end();
+			++iter)
+		{
+			if(signature.id() != iter->first &&
+				(!_cachedSignatures.contains(iter->first) ||
+				 (_cachedSignatures.value(iter->first).sensorData().imageCompressed().empty() && !iter->second.sensorData().imageCompressed().empty())))
+			{
+				_cachedSignatures.insert(iter->first, iter->second);
+				_cachedMemoryUsage += iter->second.sensorData().getMemoryUsed();
+				unsigned int count = 0;
+				if(!iter->second.getWords3().empty())
+				{
+					for(std::multimap<int, int>::const_iterator jter=iter->second.getWords().upper_bound(-1); jter!=iter->second.getWords().end(); ++jter)
+					{
+						if(util3d::isFinite(iter->second.getWords3()[jter->second]))
+						{
+							++count;
+						}
+					}
+				}
+				_cachedWordsCount.insert(std::make_pair(iter->first, (float)count));
+				UINFO("Added node data %d [map=%d] to cache", iter->first, iter->second.mapId());
+
+				_currentMapIds.insert(std::make_pair(iter->first, iter->second.mapId()));
+				if(!iter->second.getGroundTruthPose().isNull())
+				{
+					_currentGTPosesMap.insert(std::make_pair(iter->first, iter->second.getGroundTruthPose()));
+				}
+			}
+		}
+
 		// For intermediate empty nodes, keep latest image shown
 		if(signature.getWeight() >= 0)
 		{
@@ -2569,6 +2604,37 @@ void MainWindow::processStats(const rtabmap::Statistics & stat)
 			s.sensorData().clearRawData();
 			s.sensorData().clearOccupancyGridRaw();
 			_cachedMemoryUsage += s.sensorData().getMemoryUsed();
+		}
+
+		// Check missing cache
+		if(stat.getSignaturesData().size() <= 1)
+		{
+			if(_preferencesDialog->isMissingCacheRepublished() &&
+			   _preferencesDialog->isImagesKept() &&
+			   atoi(_preferencesDialog->getParameter(Parameters::kRtabmapMaxRepublished()).c_str()) > 0)
+			{
+				std::vector<int> missingIds;
+				bool ignoreNewData = smallMovement || fastMovement || signature.getWeight()<0;
+				for(std::map<int, Transform>::const_iterator iter=stat.poses().begin(); iter!=stat.poses().end(); ++iter)
+				{
+					if(!ignoreNewData || stat.refImageId() != iter->first)
+					{
+						QMap<int, Signature>::iterator ster = _cachedSignatures.find(iter->first);
+						if(ster == _cachedSignatures.end() ||
+							(ster.value().getWeight() >=0 && // ignore intermediate nodes
+							 ster.value().sensorData().imageCompressed().empty() &&
+							 ster.value().sensorData().depthOrRightCompressed().empty() &&
+							 ster.value().sensorData().laserScanCompressed().empty()))
+						{
+							missingIds.push_back(iter->first);
+						}
+					}
+				}
+				if(!missingIds.empty())
+				{
+					this->post(new RtabmapEventCmd(RtabmapEventCmd::kCmdRepublishData, UVariant(missingIds)));
+				}
+			}
 		}
 
 		UDEBUG("time= %d ms (update cache)", time.restart());
@@ -4649,8 +4715,7 @@ void MainWindow::processRtabmapGlobalPathEvent(const rtabmap::RtabmapGlobalPathE
 	else if(event.getPoses().empty() && _waypoints.size())
 	{
 		// resend the same goal
-		uSleep(1000);
-		this->postGoal(_waypoints.at(_waypointsIndex % _waypoints.size()));
+		QTimer::singleShot(1000, this, SLOT(postGoal()));
 	}
 }
 
@@ -5112,7 +5177,8 @@ void MainWindow::updateSelectSourceMenu()
 	_ui->actionStereoUsb->setChecked(_preferencesDialog->getSourceDriver() == PreferencesDialog::kSrcStereoUsb);
 	_ui->actionRealSense2_T265->setChecked(_preferencesDialog->getSourceDriver() == PreferencesDialog::kSrcStereoRealSense2);
 	_ui->actionMYNT_EYE_S_SDK->setChecked(_preferencesDialog->getSourceDriver() == PreferencesDialog::kSrcStereoMyntEye);
-	_ui->actionDepthAI->setChecked(_preferencesDialog->getSourceDriver() == PreferencesDialog::kSrcStereoDepthAI);
+	_ui->actionDepthAI_oakd->setChecked(_preferencesDialog->getSourceDriver() == PreferencesDialog::kSrcStereoDepthAI);
+	_ui->actionDepthAI_oakdlite->setChecked(_preferencesDialog->getSourceDriver() == PreferencesDialog::kSrcStereoDepthAI);
 }
 
 void MainWindow::changeImgRateSetting()
@@ -6987,9 +7053,14 @@ void MainWindow::selectMyntEyeS()
 	_preferencesDialog->selectSourceDriver(PreferencesDialog::kSrcStereoMyntEye);
 }
 
-void MainWindow::selectDepthAI()
+void MainWindow::selectDepthAIOAKD()
 {
-	_preferencesDialog->selectSourceDriver(PreferencesDialog::kSrcStereoDepthAI);
+	_preferencesDialog->selectSourceDriver(PreferencesDialog::kSrcStereoDepthAI, 1); // variant 1=IMU
+}
+
+void MainWindow::selectDepthAIOAKDLite()
+{
+	_preferencesDialog->selectSourceDriver(PreferencesDialog::kSrcStereoDepthAI, 0); // variant 0=no IMU
 }
 
 void MainWindow::dumpTheMemory()
@@ -7034,6 +7105,14 @@ void MainWindow::sendWaypoints()
 			_waypointsIndex = 0;
 			this->postGoal(_waypoints.at(_waypointsIndex));
 		}
+	}
+}
+
+void MainWindow::postGoal()
+{
+	if(!_waypoints.isEmpty())
+	{
+		postGoal(_waypoints.at(_waypointsIndex % _waypoints.size()));
 	}
 }
 
