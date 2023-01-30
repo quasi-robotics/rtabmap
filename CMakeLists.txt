@@ -20,7 +20,7 @@ SET(CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/cmake_modules")
 #######################
 SET(RTABMAP_MAJOR_VERSION 0)
 SET(RTABMAP_MINOR_VERSION 20)
-SET(RTABMAP_PATCH_VERSION 22)
+SET(RTABMAP_PATCH_VERSION 23)
 SET(RTABMAP_VERSION
   ${RTABMAP_MAJOR_VERSION}.${RTABMAP_MINOR_VERSION}.${RTABMAP_PATCH_VERSION})
   
@@ -106,6 +106,7 @@ if(MSVC)
       SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /MP${N}")
     endif()
   endif()
+  add_compile_options("/bigobj")
 endif()
 
 # [Eclipse] Automatic Discovery of Include directories (Optional, but handy) 
