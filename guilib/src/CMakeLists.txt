@@ -70,10 +70,14 @@ IF(QT4_FOUND)
     #This will generate moc_* for Qt
     QT4_WRAP_CPP(moc_srcs ${headers_ui})
     ### Qt Gui stuff  end###
-ELSE()
+ELSEIF(Qt5_FOUND)
     QT5_ADD_RESOURCES(srcs_qrc ${qrc})
     QT5_WRAP_UI(moc_uis ${uis})
     QT5_WRAP_CPP(moc_srcs ${headers_ui})
+ELSE()
+    QT6_ADD_RESOURCES(srcs_qrc ${qrc})
+    QT6_WRAP_UI(moc_uis ${uis})
+    QT6_WRAP_CPP(moc_srcs ${headers_ui})
 ENDIF()
 
 
@@ -139,18 +143,40 @@ ENDIF(QT4_FOUND)
 
 SET(LIBRARIES "")
 SET(PUBLIC_LIBRARIES "")
+SET(PUBLIC_INCLUDE_DIRS "")
 
-IF(Qt5_FOUND)
-    SET(PUBLIC_LIBRARIES ${PUBLIC_LIBRARIES} Qt5::Widgets Qt5::Core Qt5::Gui)
+IF(Qt6_FOUND)
+    SET(PUBLIC_LIBRARIES ${PUBLIC_LIBRARIES} Qt6::Widgets Qt6::Core Qt6::Gui Qt6::OpenGL)
+    SET(LIBRARIES ${LIBRARIES} Qt6::PrintSupport)
+    IF(Qt6Svg_FOUND)
+        SET(LIBRARIES ${LIBRARIES} Qt6::Svg)
+    ENDIF()
+    SET(PUBLIC_INCLUDE_DIRS
+        ${PUBLIC_INCLUDE_DIRS}
+        ${Qt6Widgets_INCLUDE_DIRS}
+        ${Qt6Core_INCLUDE_DIRS}
+        ${Qt6Gui_INCLUDE_DIRS}
+        ${Qt6OpenGL_INCLUDE_DIRS})
+ELSEIF(Qt5_FOUND)
+    SET(PUBLIC_LIBRARIES ${PUBLIC_LIBRARIES} Qt5::Widgets Qt5::Core Qt5::Gui Qt5::OpenGL)
     SET(LIBRARIES ${LIBRARIES} Qt5::PrintSupport)
     IF(Qt5Svg_FOUND)
         SET(LIBRARIES ${LIBRARIES} Qt5::Svg)
     ENDIF()
+    SET(PUBLIC_INCLUDE_DIRS
+        ${PUBLIC_INCLUDE_DIRS}
+        ${Qt5Widgets_INCLUDE_DIRS}
+        ${Qt5Core_INCLUDE_DIRS}
+        ${Qt5Gui_INCLUDE_DIRS}
+        ${Qt5OpenGL_INCLUDE_DIRS})
 ELSE()
     SET(PUBLIC_LIBRARIES ${PUBLIC_LIBRARIES} ${QTCORE_LIBRARY} ${QTGUI_LIBRARY})
     IF(QTSVG_FOUND)
         SET(LIBRARIES ${LIBRARIES} ${QTSVG_LIBRARY})
     ENDIF()
+    SET(PUBLIC_INCLUDE_DIRS
+        ${QTCORE_INCLUDE_DIRS}
+        ${QTGUI_INCLUDE_DIRS})
 ENDIF()
 
 IF(CPUTSDF_FOUND)
@@ -187,13 +213,14 @@ add_definitions(${PCL_DEFINITIONS})
 
 # create a library from the source files
 ADD_LIBRARY(rtabmap_gui ${SRC_FILES})
+ADD_LIBRARY(rtabmap::gui ALIAS rtabmap_gui)
 
 generate_export_header(rtabmap_gui
  DEPRECATED_MACRO_NAME RTABMAP_DEPRECATED)
 
 target_include_directories(rtabmap_gui PUBLIC 
-  "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../include;${CMAKE_CURRENT_BINARY_DIR}/include>"
-  "$<INSTALL_INTERFACE:${INSTALL_INCLUDE_DIR}>")
+  "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../include;${CMAKE_CURRENT_BINARY_DIR}/include;${PUBLIC_INCLUDE_DIRS}>"
+  "$<INSTALL_INTERFACE:${INSTALL_INCLUDE_DIR};${PUBLIC_INCLUDE_DIRS}>")
 
 TARGET_LINK_LIBRARIES(rtabmap_gui 
   PUBLIC
@@ -207,6 +234,7 @@ SET_TARGET_PROPERTIES(
    PROPERTIES
      VERSION ${RTABMAP_VERSION}
      SOVERSION ${RTABMAP_MAJOR_VERSION}.${RTABMAP_MINOR_VERSION}
+     EXPORT_NAME "gui"
 )
 
 INSTALL(TARGETS rtabmap_gui EXPORT rtabmap_guiTargets
@@ -231,12 +259,14 @@ install(
 )
 export(EXPORT rtabmap_guiTargets
   FILE "${CMAKE_CURRENT_BINARY_DIR}/../../${PROJECT_NAME}_guiTargets.cmake"
+  NAMESPACE rtabmap::
 )
 install(EXPORT rtabmap_guiTargets
   FILE
     ${PROJECT_NAME}_guiTargets.cmake
   DESTINATION
     ${INSTALL_CMAKE_DIR}
+  NAMESPACE rtabmap::
   COMPONENT
     devel
 )

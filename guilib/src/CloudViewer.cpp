@@ -40,6 +40,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <pcl/common/transforms.h>
 #include <QMenu>
 #include <QAction>
+#include <QActionGroup>
 #include <QtGui/QContextMenuEvent>
 #include <QInputDialog>
 #include <QtGui/QWheelEvent>
@@ -80,7 +81,6 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <vtkRenderStepsPass.h>
 #include <vtkOpenGLRenderer.h>
 #endif
-
 
 #if VTK_MAJOR_VERSION >= 8
 #include <vtkGenericOpenGLRenderWindow.h>
@@ -139,9 +139,8 @@ CloudViewer::CloudViewer(QWidget *parent, CloudViewerInteractorStyle * style) :
 		_intensityAbsMax(100.0f),
 		_coordinateFrameScale(1.0)
 {
-	UDEBUG("");
 	this->setMinimumSize(200, 200);
-	
+
 	int argc = 0;
 	UASSERT(style!=0);
 	style->setCloudViewer(this);
@@ -205,12 +204,13 @@ CloudViewer::CloudViewer(QWidget *parent, CloudViewerInteractorStyle * style) :
 	this->SetRenderWindow(_visualizer->getRenderWindow());
 #endif
 
-	// Replaced by the second line, to avoid a crash in Mac OS X on close, as well as
-	// the "Invalid drawable" warning when the view is not visible.
-	//_visualizer->setupInteractor(this->GetInteractor(), this->GetRenderWindow());
+    // Replaced by the second line, to avoid a crash in Mac OS X on close, as well as
+    // the "Invalid drawable" warning when the view is not visible.
 #if VTK_MAJOR_VERSION > 8
+    //_visualizer->setupInteractor(this->interactor(), this->renderWindow());
 	this->interactor()->SetInteractorStyle (_visualizer->getInteractorStyle());
 #else
+    //_visualizer->setupInteractor(this->GetInteractor(), this->GetRenderWindow());
 	this->GetInteractor()->SetInteractorStyle (_visualizer->getInteractorStyle());
 #endif
 	// setup a simple point picker

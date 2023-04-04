@@ -355,8 +355,8 @@ IF(mynteye_FOUND)
 ENDIF(mynteye_FOUND)
 
 IF(depthai_FOUND)
-	SET(LIBRARIES
-		${LIBRARIES}
+	SET(PUBLIC_LIBRARIES
+		${PUBLIC_LIBRARIES}
 		depthai::core
 		depthai::opencv
 	)
@@ -568,14 +568,21 @@ IF(ZEDOC_FOUND)
 ENDIF(ZEDOC_FOUND)
 
 IF(octomap_FOUND)
-    SET(PUBLIC_INCLUDE_DIRS
-		${PUBLIC_INCLUDE_DIRS}
-		${OCTOMAP_INCLUDE_DIRS}
-	)
-	SET(PUBLIC_LIBRARIES
-		${PUBLIC_LIBRARIES}
-		${OCTOMAP_LIBRARIES}
-	)
+    IF(TARGET octomap)
+        SET(PUBLIC_LIBRARIES
+            ${PUBLIC_LIBRARIES}
+            octomap
+        )
+    ELSE()
+        SET(PUBLIC_INCLUDE_DIRS
+            ${PUBLIC_INCLUDE_DIRS}
+            ${OCTOMAP_INCLUDE_DIRS}
+        )
+        SET(PUBLIC_LIBRARIES
+            ${PUBLIC_LIBRARIES}
+            ${OCTOMAP_LIBRARIES}
+        )
+    ENDIF()
 	SET(SRC_FILES
     	${SRC_FILES}
 		OctoMap.cpp
@@ -708,6 +715,13 @@ IF(GTSAM_FOUND)
 		${LIBRARIES}
 		gtsam # Windows: Place static libs at the end
 	)
+	IF(WIN32)
+		#explicitly add metis target on windows (after gtsam target)
+		SET(LIBRARIES
+			${LIBRARIES}
+			metis
+		)
+	ENDIF(WIN32)
 ENDIF(GTSAM_FOUND)
 
 IF(WITH_MADGWICK)
@@ -761,6 +775,7 @@ INCLUDE_DIRECTORIES(${INCLUDE_DIRS})
 # Add binary that is built from the source file "main.cpp".
 # The extension is automatically found.
 ADD_LIBRARY(rtabmap_core ${SRC_FILES} ${RESOURCES_HEADERS})
+ADD_LIBRARY(rtabmap::core ALIAS rtabmap_core)
 
 generate_export_header(rtabmap_core
  DEPRECATED_MACRO_NAME RTABMAP_DEPRECATED)
@@ -781,6 +796,7 @@ SET_TARGET_PROPERTIES(
    PROPERTIES
      VERSION ${RTABMAP_VERSION}
      SOVERSION ${RTABMAP_MAJOR_VERSION}.${RTABMAP_MINOR_VERSION}
+     EXPORT_NAME "core"
 )
 
 INSTALL(TARGETS rtabmap_core EXPORT rtabmap_coreTargets
@@ -806,6 +822,7 @@ install(
 
 export(EXPORT rtabmap_coreTargets
   FILE "${CMAKE_CURRENT_BINARY_DIR}/../../${PROJECT_NAME}_coreTargets.cmake"
+  NAMESPACE rtabmap::
 )
 
 install(EXPORT rtabmap_coreTargets
@@ -813,6 +830,7 @@ install(EXPORT rtabmap_coreTargets
     ${PROJECT_NAME}_coreTargets.cmake
   DESTINATION
     ${INSTALL_CMAKE_DIR}
+  NAMESPACE rtabmap::
   COMPONENT
     devel
 )

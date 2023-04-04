@@ -1,4 +1,8 @@
-cmake_minimum_required(VERSION 2.8)
+cmake_minimum_required(VERSION 3.5)
+
+if(POLICY CMP0020)
+    cmake_policy(SET CMP0020 NEW)
+endif()
 
 IF(DEFINED PROJECT_NAME)
    set(internal TRUE)
@@ -13,8 +17,10 @@ endif()
 
 IF(QT4_FOUND)
     QT4_WRAP_CPP(moc_srcs MapBuilder.h MapBuilderWifi.h)
-ELSE()
+ELSEIF(Qt5_FOUND)
     QT5_WRAP_CPP(moc_srcs MapBuilder.h MapBuilderWifi.h)
+ELSE()
+    QT6_WRAP_CPP(moc_srcs MapBuilder.h MapBuilderWifi.h)
 ENDIF()
 
 SET(srcs
@@ -38,7 +44,7 @@ IF(APPLE)
 ENDIF(APPLE)
 
 ADD_EXECUTABLE(wifi_mapping ${srcs} ${moc_srcs})
-TARGET_LINK_LIBRARIES(wifi_mapping rtabmap_gui ${LIBRARIES})
+TARGET_LINK_LIBRARIES(wifi_mapping rtabmap::gui ${LIBRARIES})
 
 if(internal)
   SET_TARGET_PROPERTIES( wifi_mapping 
