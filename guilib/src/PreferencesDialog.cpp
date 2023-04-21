@@ -380,6 +380,13 @@ PreferencesDialog::PreferencesDialog(QWidget * parent) :
 		_ui->comboBox_cameraStereo->setItemData(kSrcStereoZed - kSrcStereo, 0, Qt::UserRole - 1);
 		_ui->comboBox_odom_sensor->setItemData(2, 0, Qt::UserRole - 1);
 	}
+	else if(CameraStereoZed::sdkVersion() < 4)
+	{
+		_ui->comboBox_stereoZed_resolution->setItemData(2, 0, Qt::UserRole - 1);
+		_ui->comboBox_stereoZed_resolution->setItemData(4, 0, Qt::UserRole - 1);
+		_ui->comboBox_stereoZed_resolution->setItemData(6, 0, Qt::UserRole - 1);
+		_ui->comboBox_stereoZed_quality->setItemData(3, 0, Qt::UserRole - 1);
+	}
     if (!CameraStereoTara::available())
     {
         _ui->comboBox_cameraStereo->setItemData(kSrcStereoTara - kSrcStereo, 0, Qt::UserRole - 1);
@@ -2033,7 +2040,7 @@ void PreferencesDialog::resetSettings(QGroupBox * groupBox)
 		_ui->spinBox_stereo_right_device->setValue(-1);
 		_ui->spinBox_stereousbcam_streamWidth->setValue(0);
 		_ui->spinBox_stereousbcam_streamHeight->setValue(0);
-		_ui->comboBox_stereoZed_resolution->setCurrentIndex(2);
+		_ui->comboBox_stereoZed_resolution->setCurrentIndex(CameraStereoZed::sdkVersion()<4?3:6);
 		_ui->comboBox_stereoZed_quality->setCurrentIndex(1);
 		_ui->checkbox_stereoZed_selfCalibration->setChecked(true);
 		_ui->comboBox_stereoZed_sensingMode->setCurrentIndex(0);
@@ -6609,35 +6616,28 @@ void PreferencesDialog::testOdometry()
 		return;
 	}
 
+	ParametersMap parameters = this->getAllParameters();
 	IMUThread * imuThread = 0;
 	if((this->getSourceDriver() == kSrcStereoImages ||
 	   this->getSourceDriver() == kSrcRGBDImages ||
 	   this->getSourceDriver() == kSrcImages) &&
 	   !_ui->lineEdit_cameraImages_path_imu->text().isEmpty())
 	{
-		if(this->getOdomStrategy() != Odometry::kTypeOkvis &&
-		   this->getOdomStrategy() != Odometry::kTypeMSCKF &&
-		   this->getOdomStrategy() != Odometry::kTypeVINS &&
-		   this->getOdomStrategy() != Odometry::kTypeOpenVINS)
+		imuThread = new IMUThread(_ui->spinBox_cameraImages_max_imu_rate->value(), this->getIMULocalTransform());
+		if(getIMUFilteringStrategy()>0)
+		{
+			imuThread->enableIMUFiltering(getIMUFilteringStrategy()-1, parameters, getIMUFilteringBaseFrameConversion());
+		}
+		if(!imuThread->init(_ui->lineEdit_cameraImages_path_imu->text().toStdString()))
 		{
 			QMessageBox::warning(this, tr("Source IMU Path"),
-					tr("IMU path is set but odometry chosen doesn't support asynchronous IMU, ignoring IMU..."), QMessageBox::Ok);
-		}
-		else
-		{
-			imuThread = new IMUThread(_ui->spinBox_cameraImages_max_imu_rate->value(), this->getIMULocalTransform());
-			if(!imuThread->init(_ui->lineEdit_cameraImages_path_imu->text().toStdString()))
-			{
-				QMessageBox::warning(this, tr("Source IMU Path"),
-					tr("Initialization of IMU data has failed! Path=%1.").arg(_ui->lineEdit_cameraImages_path_imu->text()), QMessageBox::Ok);
-				delete camera;
-				delete imuThread;
-				return;
-			}
+				tr("Initialization of IMU data has failed! Path=%1.").arg(_ui->lineEdit_cameraImages_path_imu->text()), QMessageBox::Ok);
+			delete camera;
+			delete imuThread;
+			return;
 		}
 	}
 
-	ParametersMap parameters = this->getAllParameters();
 	if(getOdomRegistrationApproach() < 3)
 	{
 		uInsert(parameters, ParametersPair(Parameters::kRegStrategy(), uNumber2Str(getOdomRegistrationApproach())));
