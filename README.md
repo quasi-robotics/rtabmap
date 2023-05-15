@@ -4,10 +4,14 @@ rtabmap
 [![RTAB-Map Logo](https://raw.githubusercontent.com/introlab/rtabmap/master/guilib/src/images/RTAB-Map100.png)](http://introlab.github.io/rtabmap)
 
 [![Release][release-image]][releases]
+[![Downloads][downloads-image]][downloads]
 [![License][license-image]][license]
 
-[release-image]: https://img.shields.io/badge/release-0.20.16-green.svg?style=flat
+[release-image]: https://img.shields.io/badge/release-0.21.0-green.svg?style=flat
 [releases]: https://github.com/introlab/rtabmap/releases
+
+[downloads-image]: https://img.shields.io/github/downloads/introlab/rtabmap/total?label=downloads
+[downloads]: https://github.com/introlab/rtabmap/releases
 
 [license-image]: https://img.shields.io/badge/license-BSD-green.svg?style=flat
 [license]: https://github.com/introlab/rtabmap/blob/master/LICENSE
@@ -71,6 +75,12 @@ This project is supported by [IntRoLab - Intelligent / Interactive / Integrated 
             <td>Rolling</td>
             <td><a href="http://build.ros2.org/job/Rbin_uJ64__rtabmap__ubuntu_jammy_amd64__binary/"><img src="http://build.ros2.org/buildStatus/icon?job=Rbin_uJ64__rtabmap__ubuntu_jammy_amd64__binary" alt="Build Status"/></td>
         </tr>
+        <tr>
+           <td>Docker</td>
+           <td>
+             <a href="https://hub.docker.com/r/introlab3it/rtabmap">rtabmap</a>
+           </td>
+           <td><img src="https://img.shields.io/docker/pulls/introlab3it/rtabmap.svg?label=pulls" alt="Docker Pulls"/></td>
+        </tr>
     </tbody>
 </table>
- 
