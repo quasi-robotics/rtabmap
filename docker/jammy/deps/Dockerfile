@@ -93,8 +93,12 @@ RUN git clone --branch 4.5.4 https://github.com/opencv/opencv.git && \
 RUN rm /bin/sh && ln -s /bin/bash /bin/sh
 
 COPY ./docker/jammy/deps/ros_entrypoint.sh /ros_entrypoint.sh
+RUN chmod +x /ros_entrypoint.sh
 ENTRYPOINT [ "/ros_entrypoint.sh" ]
 
 # ros2 seems not sourcing by default its multi-arch folders
 ENV LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/opt/ros/humble/lib/x86_64-linux-gnu:/opt/ros/humble/lib/aarch64-linux-gnu
+
+# for jetson (https://github.com/introlab/rtabmap/issues/776)
+ENV LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/usr/lib/aarch64-linux-gnu/tegra
 
