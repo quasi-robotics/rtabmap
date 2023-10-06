@@ -816,6 +816,7 @@ PreferencesDialog::PreferencesDialog(QWidget * parent) :
 
 	connect(_ui->checkbox_rgbd_colorOnly, SIGNAL(stateChanged(int)), this, SLOT(makeObsoleteSourcePanel()));
 	connect(_ui->spinBox_source_imageDecimation, SIGNAL(valueChanged(int)), this, SLOT(makeObsoleteSourcePanel()));
+	connect(_ui->comboBox_source_histogramMethod, SIGNAL(currentIndexChanged(int)), this, SLOT(makeObsoleteSourcePanel()));
 	connect(_ui->checkbox_stereo_depthGenerated, SIGNAL(stateChanged(int)), this, SLOT(makeObsoleteSourcePanel()));
 	connect(_ui->checkBox_stereo_exposureCompensation, SIGNAL(stateChanged(int)), this, SLOT(makeObsoleteSourcePanel()));
 	connect(_ui->pushButton_calibrate, SIGNAL(clicked()), this, SLOT(calibrate()));
@@ -1432,6 +1433,48 @@ PreferencesDialog::PreferencesDialog(QWidget * parent) :
 	_ui->lineEdit_OdomVinsPath->setObjectName(Parameters::kOdomVINSConfigPath().c_str());
 	connect(_ui->toolButton_OdomVinsPath, SIGNAL(clicked()), this, SLOT(changeOdometryVINSConfigPath()));
 
+	// Odometry OpenVINS
+	_ui->checkBox_OdomOpenVINSUseStereo->setObjectName(Parameters::kOdomOpenVINSUseStereo().c_str());
+	_ui->checkBox_OdomOpenVINSUseKLT->setObjectName(Parameters::kOdomOpenVINSUseKLT().c_str());
+	_ui->spinBox_OdomOpenVINSNumPts->setObjectName(Parameters::kOdomOpenVINSNumPts().c_str());
+	_ui->spinBox_OdomOpenVINSFastThreshold->setObjectName(Parameters::kOdomOpenVINSFastThreshold().c_str());
+	_ui->spinBox_OdomOpenVINSGridX->setObjectName(Parameters::kOdomOpenVINSGridX().c_str());
+	_ui->spinBox_OdomOpenVINSGridY->setObjectName(Parameters::kOdomOpenVINSGridY().c_str());
+	_ui->spinBox_OdomOpenVINSMinPxDist->setObjectName(Parameters::kOdomOpenVINSMinPxDist().c_str());
+	_ui->doubleSpinBox_OdomOpenVINSKNNRatio->setObjectName(Parameters::kOdomOpenVINSKNNRatio().c_str());
+
+	_ui->checkBox_OdomOpenVINSUseFEJ->setObjectName(Parameters::kOdomOpenVINSUseFEJ().c_str());
+	_ui->comboBox_OdomOpenVINSIntegration->setObjectName(Parameters::kOdomOpenVINSIntegration().c_str());
+	_ui->spinBox_OdomOpenVINSMaxClones->setObjectName(Parameters::kOdomOpenVINSMaxClones().c_str());
+	_ui->spinBox_OdomOpenVINSMaxSLAM->setObjectName(Parameters::kOdomOpenVINSMaxSLAM().c_str());
+	_ui->spinBox_OdomOpenVINSMaxSLAMInUpdate->setObjectName(Parameters::kOdomOpenVINSMaxSLAMInUpdate().c_str());
+	_ui->spinBox_OdomOpenVINSMaxMSCKFInUpdate->setObjectName(Parameters::kOdomOpenVINSMaxMSCKFInUpdate().c_str());
+	_ui->comboBox_OdomOpenVINSFeatRepMSCKF->setObjectName(Parameters::kOdomOpenVINSFeatRepMSCKF().c_str());
+	_ui->comboBox_OdomOpenVINSFeatRepSLAM->setObjectName(Parameters::kOdomOpenVINSFeatRepSLAM().c_str());
+	_ui->doubleSpinBox_OdomOpenVINSDtSLAMDelay->setObjectName(Parameters::kOdomOpenVINSDtSLAMDelay().c_str());
+	_ui->doubleSpinBox_OdomOpenVINSGravityMag->setObjectName(Parameters::kOdomOpenVINSGravityMag().c_str());
+
+	_ui->doubleSpinBox_OdomOpenVINSInitWindowTime->setObjectName(Parameters::kOdomOpenVINSInitWindowTime().c_str());
+	_ui->doubleSpinBox_OdomOpenVINSInitIMUThresh->setObjectName(Parameters::kOdomOpenVINSInitIMUThresh().c_str());
+	_ui->doubleSpinBox_OdomOpenVINSInitMaxDisparity->setObjectName(Parameters::kOdomOpenVINSInitMaxDisparity().c_str());
+	_ui->spinBox_OdomOpenVINSInitMaxFeatures->setObjectName(Parameters::kOdomOpenVINSInitMaxFeatures().c_str());
+
+	_ui->checkBox_OdomOpenVINSTryZUPT->setObjectName(Parameters::kOdomOpenVINSTryZUPT().c_str());
+	_ui->doubleSpinBox_OdomOpenVINSZUPTChi2Multiplier->setObjectName(Parameters::kOdomOpenVINSZUPTChi2Multiplier().c_str());
+	_ui->doubleSpinBox_OdomOpenVINSZUPTMaxVelodicy->setObjectName(Parameters::kOdomOpenVINSZUPTMaxVelodicy().c_str());
+	_ui->doubleSpinBox_OdomOpenVINSZUPTNoiseMultiplier->setObjectName(Parameters::kOdomOpenVINSZUPTNoiseMultiplier().c_str());
+	_ui->doubleSpinBox_OdomOpenVINSZUPTMaxDisparity->setObjectName(Parameters::kOdomOpenVINSZUPTMaxDisparity().c_str());
+	_ui->checkBox_OdomOpenVINSZUPTOnlyAtBeginning->setObjectName(Parameters::kOdomOpenVINSZUPTOnlyAtBeginning().c_str());
+
+	_ui->doubleSpinBox_OdomOpenVINSAccelerometerNoiseDensity->setObjectName(Parameters::kOdomOpenVINSAccelerometerNoiseDensity().c_str());
+	_ui->doubleSpinBox_OdomOpenVINSAccelerometerRandomWalk->setObjectName(Parameters::kOdomOpenVINSAccelerometerRandomWalk().c_str());
+	_ui->doubleSpinBox_OdomOpenVINSGyroscopeNoiseDensity->setObjectName(Parameters::kOdomOpenVINSGyroscopeNoiseDensity().c_str());
+	_ui->doubleSpinBox_OdomOpenVINSGyroscopeRandomWalk->setObjectName(Parameters::kOdomOpenVINSGyroscopeRandomWalk().c_str());
+	_ui->doubleSpinBox_OdomOpenVINSUpMSCKFSigmaPx->setObjectName(Parameters::kOdomOpenVINSUpMSCKFSigmaPx().c_str());
+	_ui->doubleSpinBox_OdomOpenVINSUpMSCKFChi2Multiplier->setObjectName(Parameters::kOdomOpenVINSUpMSCKFChi2Multiplier().c_str());
+	_ui->doubleSpinBox_OdomOpenVINSUpSLAMSigmaPx->setObjectName(Parameters::kOdomOpenVINSUpSLAMSigmaPx().c_str());
+	_ui->doubleSpinBox_OdomOpenVINSUpSLAMChi2Multiplier->setObjectName(Parameters::kOdomOpenVINSUpSLAMChi2Multiplier().c_str());
+
 	//Stereo
 	_ui->stereo_winWidth->setObjectName(Parameters::kStereoWinWidth().c_str());
 	_ui->stereo_winHeight->setObjectName(Parameters::kStereoWinHeight().c_str());
@@ -1985,6 +2028,7 @@ void PreferencesDialog::resetSettings(QGroupBox * groupBox)
 
 		_ui->checkbox_rgbd_colorOnly->setChecked(false);
 		_ui->spinBox_source_imageDecimation->setValue(1);
+		_ui->comboBox_source_histogramMethod->setCurrentIndex(0);
 		_ui->checkbox_stereo_depthGenerated->setChecked(false);
 		_ui->checkBox_stereo_exposureCompensation->setChecked(false);
 		_ui->openni2_autoWhiteBalance->setChecked(true);
@@ -2419,6 +2463,7 @@ void PreferencesDialog::readCameraSettings(const QString & filePath)
 	_ui->lineEdit_sourceDevice->setText(settings.value("device",_ui->lineEdit_sourceDevice->text()).toString());
 	_ui->lineEdit_sourceLocalTransform->setText(settings.value("localTransform",_ui->lineEdit_sourceLocalTransform->text()).toString());
 	_ui->spinBox_source_imageDecimation->setValue(settings.value("imageDecimation",_ui->spinBox_source_imageDecimation->value()).toInt());
+	_ui->comboBox_source_histogramMethod->setCurrentIndex(settings.value("histogramMethod", _ui->comboBox_source_histogramMethod->currentIndex()).toInt());
 	// Backward compatibility
 	if(_ui->lineEdit_sourceLocalTransform->text().compare("0 0 1 -1 0 0 0 -1 0") == 0)
 	{
@@ -2957,6 +3002,7 @@ void PreferencesDialog::writeCameraSettings(const QString & filePath) const
 	settings.setValue("device", 		 _ui->lineEdit_sourceDevice->text());
 	settings.setValue("localTransform",  _ui->lineEdit_sourceLocalTransform->text());
 	settings.setValue("imageDecimation",  _ui->spinBox_source_imageDecimation->value());
+	settings.setValue("histogramMethod",  _ui->comboBox_source_histogramMethod->currentIndex());
 
 	settings.beginGroup("rgbd");
 	settings.setValue("driver", 	       _ui->comboBox_cameraRGBD->currentIndex());
@@ -5921,6 +5967,10 @@ int PreferencesDialog::getSourceImageDecimation() const
 {
 	return _ui->spinBox_source_imageDecimation->value();
 }
+int PreferencesDialog::getSourceHistogramMethod() const
+{
+	return _ui->comboBox_source_histogramMethod->currentIndex();
+}
 bool PreferencesDialog::isSourceStereoDepthGenerated() const
 {
 	return _ui->checkbox_stereo_depthGenerated->isChecked();
@@ -6725,6 +6775,7 @@ void PreferencesDialog::testOdometry()
 	cameraThread.setMirroringEnabled(isSourceMirroring());
 	cameraThread.setColorOnly(_ui->checkbox_rgbd_colorOnly->isChecked());
 	cameraThread.setImageDecimation(_ui->spinBox_source_imageDecimation->value());
+	cameraThread.setHistogramMethod(_ui->comboBox_source_histogramMethod->currentIndex());
 	cameraThread.setStereoToDepth(_ui->checkbox_stereo_depthGenerated->isChecked());
 	cameraThread.setStereoExposureCompensation(_ui->checkBox_stereo_exposureCompensation->isChecked());
 	cameraThread.setScanParameters(
@@ -6796,6 +6847,7 @@ void PreferencesDialog::testCamera()
 		cameraThread.setMirroringEnabled(isSourceMirroring());
 		cameraThread.setColorOnly(_ui->checkbox_rgbd_colorOnly->isChecked());
 		cameraThread.setImageDecimation(_ui->spinBox_source_imageDecimation->value());
+		cameraThread.setHistogramMethod(_ui->comboBox_source_histogramMethod->currentIndex());
 		cameraThread.setStereoToDepth(_ui->checkbox_stereo_depthGenerated->isChecked());
 		cameraThread.setStereoExposureCompensation(_ui->checkBox_stereo_exposureCompensation->isChecked());
 		cameraThread.setScanParameters(
