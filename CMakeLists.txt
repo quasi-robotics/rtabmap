@@ -325,9 +325,11 @@ IF(WITH_QT)
     ENDIF()
         
     IF(QT4_FOUND OR Qt5_FOUND OR Qt6_FOUND)
-        set(CMAKE_AUTOUIC ON)
-        set(CMAKE_AUTOMOC ON)
-        set(CMAKE_AUTORCC ON)
+        # For VCPKG build, set those global variables to off, 
+        # we will enable them for jsut specific targets
+        set(CMAKE_AUTOMOC OFF)
+        set(CMAKE_AUTORCC OFF)
+        set(CMAKE_AUTOUIC OFF)
         IF("${VTK_MAJOR_VERSION}" EQUAL 5)
             FIND_PACKAGE(QVTK REQUIRED) # only for VTK 5
         ELSE()
@@ -814,6 +816,7 @@ IF(NOT MSVC)
            open_chisel_FOUND OR
            vins_FOUND OR
            ov_msckf_FOUND OR
+           msckf_vio_FOUND OR
            libpointmatcher_FOUND))
      #Newest versions require std11
      include(CheckCXXCompilerFlag)
@@ -828,6 +831,7 @@ IF(NOT MSVC)
       ENDIF()
     ENDIF()
 ENDIF()
+
 
 ####### OSX BUNDLE CMAKE_INSTALL_PREFIX #######
 IF(APPLE AND BUILD_AS_BUNDLE)
@@ -913,9 +917,9 @@ ENDIF(NOT Open3D_FOUND)
 IF(NOT FastCV_FOUND)
    SET(FASTCV "//")
 ENDIF(NOT FastCV_FOUND)
-IF(NOT opengv_FOUND)
+IF(NOT opengv_FOUND OR NOT WITH_OPENGV)
    SET(OPENGV "//")
-ENDIF(NOT opengv_FOUND)
+ENDIF(NOT opengv_FOUND OR NOT WITH_OPENGV)
 IF(NOT PDAL_FOUND)
    SET(PDAL "//")
 ENDIF(NOT PDAL_FOUND)
@@ -1459,7 +1463,7 @@ ELSE()
 MESSAGE(STATUS "  With Open3D               = NO (Open3D not found)")
 ENDIF()
 
-IF(opengv_FOUND)
+IF(opengv_FOUND AND WITH_OPENGV)
 MESSAGE(STATUS "  With OpenGV ${opengv_VERSION}           = YES (License: BSD)")
 ELSEIF(NOT WITH_OPENGV)
 MESSAGE(STATUS "  With OpenGV               = NO (WITH_OPENGV=OFF)")
