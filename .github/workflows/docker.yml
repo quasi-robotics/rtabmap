@@ -10,6 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     
     strategy:
+      fail-fast: false
       matrix:
         docker_tag: [focal-deps, jammy-deps, jammy-iron-deps]
         include:
@@ -69,6 +70,7 @@ jobs:
     runs-on: ubuntu-latest
     
     strategy:
+      fail-fast: false
       matrix:
         docker_tag: [bionic, focal, jammy, jammy-iron, android23, android24, android26, android30]
         include:

@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2010-2023, Mathieu Labbe - IntRoLab - Universite de Sherbrooke
+Copyright (c) 2010-2016, Mathieu Labbe - IntRoLab - Universite de Sherbrooke
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -25,14 +25,55 @@ ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
-#ifndef CORELIB_INCLUDE_RTABMAP_CORE_OCTOMAP_H_
-#define CORELIB_INCLUDE_RTABMAP_CORE_OCTOMAP_H_
+#ifndef RTABMAP_LINKREFININGDIALOG_H_
+#define RTABMAP_LINKREFININGDIALOG_H_
 
-/*
- * Deprecated header, use the one below directly!
- */
+#include "rtabmap/gui/rtabmap_gui_export.h" // DLL export/import defines
 
-#include <rtabmap/core/global_map/OctoMap.h>
+#include <rtabmap/core/Link.h>
 
+#include <QDialog>
 
-#endif /* CORELIB_INCLUDE_RTABMAP_CORE_OCTOMAP_H_ */
+class Ui_linkRefiningDialog;
+
+namespace rtabmap {
+
+class RTABMAP_GUI_EXPORT LinkRefiningDialog : public QDialog
+{
+	Q_OBJECT
+
+public:
+	LinkRefiningDialog(QWidget * parent = 0);
+
+	virtual ~LinkRefiningDialog();
+
+	void setMinMax(
+		int nodeIdMin,
+		int nodeIdMax,
+		int mapIdMin,
+		int mapIdMax);
+
+	Link::Type getLinkType() const;
+	void getIntraInterSessions(bool & intra, bool & inter) const;
+	bool isRangeByNodeId() const;
+	bool isRangeByMapId() const;
+	void getRangeNodeId(int & from, int & to) const;
+	void getRangeMapId(int & from, int & to) const;
+
+private Q_SLOTS:
+	void restoreDefaults();
+	void updateIntraInterState();
+	void setRangeToNodeId();
+	void setRangeToMapId();
+
+private:
+	Ui_linkRefiningDialog * ui_;
+	int defaultNodeIdMin_;
+	int defaultNodeIdMax_;
+	int defaultMapIdMin_;
+	int defaultMapIdMax_;
+};
+
+}
+
+#endif /* RTABMAP_LINKREFININGDIALOG_H_ */
