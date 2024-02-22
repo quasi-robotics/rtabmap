@@ -1442,8 +1442,10 @@ bool Rtabmap::process(
 	float angleToClosestNodeInTheGraph = 0;
 	if(_rgbdSlamMode)
 	{
-		statistics_.addStatistic(Statistics::kMemoryOdometry_variance_lin(), odomCovariance.empty()?1.0f:(float)odomCovariance.at<double>(0,0));
-		statistics_.addStatistic(Statistics::kMemoryOdometry_variance_ang(), odomCovariance.empty()?1.0f:(float)odomCovariance.at<double>(5,5));
+		double linVar = odomCovariance.empty()?1.0f:uMax3(odomCovariance.at<double>(0,0), odomCovariance.at<double>(1,1)>=9999?0:odomCovariance.at<double>(1,1), odomCovariance.at<double>(2,2)>=9999?0:odomCovariance.at<double>(2,2));
+		double angVar = odomCovariance.empty()?1.0f:uMax3(odomCovariance.at<double>(3,3)>=9999?0:odomCovariance.at<double>(3,3), odomCovariance.at<double>(4,4)>=9999?0:odomCovariance.at<double>(4,4), odomCovariance.at<double>(5,5));
+		statistics_.addStatistic(Statistics::kMemoryOdometry_variance_lin(), (float)linVar);
+		statistics_.addStatistic(Statistics::kMemoryOdometry_variance_ang(), (float)angVar);
 
 		//Verify if there was a rehearsal
 		int rehearsedId = (int)uValue(statistics_.data(), Statistics::kMemoryRehearsal_merged(), 0.0f);
@@ -1866,9 +1868,46 @@ bool Rtabmap::process(
 	//============================================================
 	// Bayes filter update
 	//============================================================
-	int previousId = signature->getLinks().size() && signature->getLinks().begin()->first!=signature->id()?signature->getLinks().begin()->first:0;
+	bool localizationOnPreviousUpdate = false;
+	if(_memory->isIncremental())
+	{
+		localizationOnPreviousUpdate =
+			signature->getLinks().size() &&
+			signature->getLinks().begin()->first!=signature->id() &&
+			_memory->getLoopClosureLinks(signature->getLinks().begin()->first, false).size() != 0;
+	}
+	else
+	{
+		// localization mode
+
+		// Count how many localization links are in the constraints
+		int localizationLinks = 0;
+		int previousIdWithLocalizationLink = 0;
+		for(std::multimap<int, Link>::iterator iter=_odomCacheConstraints.begin();
+				iter!=_odomCacheConstraints.end(); ++iter)
+		{
+			if(previousIdWithLocalizationLink == iter->first)
+			{
+				// ignore links with node already counted
+				continue;
+			}
+			if(iter->second.type() == Link::kGlobalClosure ||
+			   iter->second.type() == Link::kLocalSpaceClosure ||
+			   iter->second.type() == Link::kLocalTimeClosure ||
+			   iter->second.type() == Link::kUserClosure ||
+			   iter->second.type() == Link::kNeighborMerged ||
+			   iter->second.type() == Link::kLandmark)
+			{
+				++localizationLinks;
+				previousIdWithLocalizationLink = iter->first;
+			}
+		}
+
+		localizationOnPreviousUpdate = localizationLinks > 1; // need two links in case we have delayed localization
+	}
+
 	// Not a bad signature, not an intermediate node, not a small displacement unless the previous signature didn't have a loop closure, not too fast movement
-	if(!signature->isBadSignature() && signature->getWeight()>=0 && (!smallDisplacement || _memory->getLoopClosureLinks(previousId, false).size() == 0) && !tooFastMovement)
+	if(!signature->isBadSignature() && signature->getWeight()>=0 && (!smallDisplacement || !localizationOnPreviousUpdate) && !tooFastMovement)
 	{
 		// If the working memory is empty, don't do the detection. It happens when it
 		// is the first time the detector is started (there needs some images to
@@ -2548,7 +2587,7 @@ bool Rtabmap::process(
 
 			// don't do it if it is a small displacement unless the previous signature didn't have a loop closure
 			// don't do it if there is a too fast movement
-			if((!smallDisplacement || _memory->getLoopClosureLinks(previousId, false).size() == 0) && !tooFastMovement)
+			if((!smallDisplacement || !localizationOnPreviousUpdate) && !tooFastMovement)
 			{
 
 				//============================================================
@@ -2959,9 +2998,10 @@ bool Rtabmap::process(
 			{
 				// Make the new one the parent of the old one
 				UASSERT(info.covariance.at<double>(0,0) > 0.0 && info.covariance.at<double>(5,5) > 0.0);
+				
+				loopClosureLinearVariance = uMax3(info.covariance.at<double>(0,0), info.covariance.at<double>(1,1)>=9999?0:info.covariance.at<double>(1,1), info.covariance.at<double>(2,2)>=9999?0:info.covariance.at<double>(2,2));
+				loopClosureAngularVariance = uMax3(info.covariance.at<double>(3,3)>=9999?0:info.covariance.at<double>(3,3), info.covariance.at<double>(4,4)>=9999?0:info.covariance.at<double>(4,4), info.covariance.at<double>(5,5));
 				cv::Mat information = getInformation(info.covariance);
-				loopClosureLinearVariance = 1.0/information.at<double>(0,0);
-				loopClosureAngularVariance = 1.0/information.at<double>(5,5);
 				rejectedGlobalLoopClosure = !_memory->addLink(Link(signature->id(), _loopClosureHypothesis.first, Link::kGlobalClosure, transform, information));
 				if(!rejectedGlobalLoopClosure)
 				{
