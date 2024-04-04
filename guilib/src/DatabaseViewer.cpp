@@ -351,6 +351,10 @@ DatabaseViewer::DatabaseViewer(const QString & ini, QWidget * parent) :
 	connect(ui_->horizontalSlider_B, SIGNAL(valueChanged(int)), this, SLOT(sliderBValueChanged(int)));
 	connect(ui_->horizontalSlider_A, SIGNAL(sliderMoved(int)), this, SLOT(sliderAMoved(int)));
 	connect(ui_->horizontalSlider_B, SIGNAL(sliderMoved(int)), this, SLOT(sliderBMoved(int)));
+	connect(ui_->toolButton_edit_priorA, SIGNAL(clicked(bool)), this, SLOT(editConstraint()));
+	connect(ui_->toolButton_edit_priorB, SIGNAL(clicked(bool)), this, SLOT(editConstraint()));
+	connect(ui_->toolButton_remove_priorA, SIGNAL(clicked(bool)), this, SLOT(rejectConstraint()));
+	connect(ui_->toolButton_remove_priorB, SIGNAL(clicked(bool)), this, SLOT(rejectConstraint()));
 
 	connect(ui_->spinBox_mesh_angleTolerance, SIGNAL(valueChanged(int)), this, SLOT(update3dView()));
 	connect(ui_->spinBox_mesh_minClusterSize, SIGNAL(valueChanged(int)), this, SLOT(update3dView()));
@@ -809,7 +813,7 @@ void DatabaseViewer::openDatabase()
 	}
 }
 
-bool DatabaseViewer::openDatabase(const QString & path)
+bool DatabaseViewer::openDatabase(const QString & path, const ParametersMap & overriddenParameters)
 {
 	UDEBUG("Open database \"%s\"", path.toStdString().c_str());
 	if(QFile::exists(path))
@@ -843,6 +847,9 @@ bool DatabaseViewer::openDatabase(const QString & path)
 
 				// look if there are saved parameters
 				ParametersMap parameters = dbDriver_->getLastParameters();
+
+				// add overridden parameters
+				uInsert(parameters, overriddenParameters);
 
 				if(parameters.size())
 				{
@@ -944,12 +951,14 @@ bool DatabaseViewer::closeDatabase()
 					if(refinedIter != linksRefined_.end())
 					{
 						dbDriver_->addLink(refinedIter->second);
-						dbDriver_->addLink(refinedIter->second.inverse());
+						if(refinedIter->second.from() != refinedIter->second.to())
+							dbDriver_->addLink(refinedIter->second.inverse());
 					}
 					else
 					{
 						dbDriver_->addLink(iter->second);
-						dbDriver_->addLink(iter->second.inverse());
+						if(iter->second.from() != iter->second.to())
+							dbDriver_->addLink(iter->second.inverse());
 					}
 				}
 
@@ -959,7 +968,8 @@ bool DatabaseViewer::closeDatabase()
 					if(!containsLink(linksAdded_, iter->second.from(), iter->second.to()))
 					{
 						dbDriver_->updateLink(iter->second);
-						dbDriver_->updateLink(iter->second.inverse());
+						if(iter->second.from() != iter->second.to())
+							dbDriver_->updateLink(iter->second.inverse());
 					}
 				}
 
@@ -967,7 +977,8 @@ bool DatabaseViewer::closeDatabase()
 				for(std::multimap<int, rtabmap::Link>::iterator iter=linksRemoved_.begin(); iter!=linksRemoved_.end(); ++iter)
 				{
 					dbDriver_->removeLink(iter->second.to(), iter->second.from());
-					dbDriver_->removeLink(iter->second.from(), iter->second.to());
+					if(iter->second.from() != iter->second.to())
+						dbDriver_->removeLink(iter->second.from(), iter->second.to());
 				}
 				linksAdded_.clear();
 				linksRefined_.clear();
@@ -1588,13 +1599,13 @@ void DatabaseViewer::extractImages()
 							StereoCameraModel model(
 									cameraName,
 									data.imageRaw().size(),
-									data.stereoCameraModels()[i].left().K(),
-									data.stereoCameraModels()[i].left().D(),
+									data.stereoCameraModels()[i].left().K_raw(),
+									data.stereoCameraModels()[i].left().D_raw(),
 									data.stereoCameraModels()[i].left().R(),
 									data.stereoCameraModels()[i].left().P(),
 									data.rightRaw().size(),
-									data.stereoCameraModels()[i].right().K(),
-									data.stereoCameraModels()[i].right().D(),
+									data.stereoCameraModels()[i].right().K_raw(),
+									data.stereoCameraModels()[i].right().D_raw(),
 									data.stereoCameraModels()[i].right().R(),
 									data.stereoCameraModels()[i].right().P(),
 									data.stereoCameraModels()[i].R(),
@@ -1646,8 +1657,8 @@ void DatabaseViewer::extractImages()
 							}
 							CameraModel model(cameraName,
 									data.imageRaw().size(),
-									data.cameraModels()[i].K(),
-									data.cameraModels()[i].D(),
+									data.cameraModels()[i].K_raw(),
+									data.cameraModels()[i].D_raw(),
 									data.cameraModels()[i].R(),
 									data.cameraModels()[i].P(),
 									data.cameraModels()[i].localTransform());
@@ -1750,6 +1761,10 @@ void DatabaseViewer::updateIds()
 	ui_->label_alignPosesWithGPS->setVisible(false);
 	ui_->label_alignPosesWithGroundTruth->setVisible(false);
 	ui_->label_alignScansCloudsWithGroundTruth->setVisible(false);
+	ui_->toolButton_edit_priorA->setVisible(false);
+	ui_->toolButton_edit_priorB->setVisible(false);
+	ui_->toolButton_remove_priorA->setVisible(false);
+	ui_->toolButton_remove_priorB->setVisible(false);
 	ui_->menuEdit->setEnabled(true);
 	ui_->actionGenerate_3D_map_pcd->setEnabled(true);
 	ui_->actionExport->setEnabled(true);
@@ -4582,6 +4597,8 @@ void DatabaseViewer::sliderAValueChanged(int value)
 			ui_->label_scanA,
 			ui_->label_gravityA,
 			ui_->label_priorA,
+			ui_->toolButton_edit_priorA,
+			ui_->toolButton_remove_priorA,
 			ui_->label_gpsA,
 			ui_->label_gtA,
 			ui_->label_sensorsA,
@@ -4607,6 +4624,8 @@ void DatabaseViewer::sliderBValueChanged(int value)
 			ui_->label_scanB,
 			ui_->label_gravityB,
 			ui_->label_priorB,
+			ui_->toolButton_edit_priorB,
+			ui_->toolButton_remove_priorB,
 			ui_->label_gpsB,
 			ui_->label_gtB,
 			ui_->label_sensorsB,
@@ -4630,6 +4649,8 @@ void DatabaseViewer::update(int value,
 						QLabel * labelScan,
 						QLabel * labelGravity,
 						QLabel * labelPrior,
+						QToolButton * editPriorButton,
+						QToolButton * removePriorButton,
 						QLabel * labelGps,
 						QLabel * labelGt,
 						QLabel * labelSensors,
@@ -4652,6 +4673,8 @@ void DatabaseViewer::update(int value,
 	labelScan ->clear();
 	labelGravity->clear();
 	labelPrior->clear();
+	editPriorButton->setVisible(false);
+	removePriorButton->setVisible(false);
 	labelGps->clear();
 	labelGt->clear();
 	labelSensors->clear();
@@ -4794,15 +4817,25 @@ void DatabaseViewer::update(int value,
 					labelGravity->setToolTip(QString("roll=%1 pitch=%2 yaw=%3").arg(roll).arg(pitch).arg(yaw));
 				}
 
-				std::multimap<int, Link> priorLink;
-				dbDriver_->loadLinks(id, priorLink, Link::kPosePrior);
-				if(!priorLink.empty())
+				std::multimap<int, rtabmap::Link> links = updateLinksWithModifications(links_);
+				if(graph::findLink(links, id, id, false, Link::kPosePrior)!=links.end())
 				{
-					priorLink.begin()->second.transform().getTranslationAndEulerAngles(x,y,z,roll, pitch,yaw);
+					Link & priorLink = graph::findLink(links, id, id, false, Link::kPosePrior)->second;
+					priorLink.transform().getTranslationAndEulerAngles(x,y,z,roll, pitch,yaw);
 					labelPrior->setText(QString("xyz=(%1,%2,%3)\nrpy=(%4,%5,%6)").arg(x).arg(y).arg(z).arg(roll).arg(pitch).arg(yaw));
 					std::stringstream out;
-					out << priorLink.begin()->second.infMatrix().inv();
+					out << priorLink.infMatrix().inv();
 					labelPrior->setToolTip(QString("%1").arg(out.str().c_str()));
+					removePriorButton->setVisible(true);
+					editPriorButton->setToolTip(tr("Edit Prior"));
+					editPriorButton->setText("...");
+					editPriorButton->setVisible(true);
+				}
+				else if(!odomPose.isNull())
+				{
+					editPriorButton->setToolTip(tr("Add Prior"));
+					editPriorButton->setText("+");
+					editPriorButton->setVisible(true);
 				}
 
 				if(gps.stamp()>0.0)
@@ -5981,16 +6014,38 @@ void DatabaseViewer::editConstraint()
 {
 	if(ids_.size())
 	{
-		Link link;
-		if(ui_->label_type->text().toInt() == Link::kLandmark)
+		Link link(0,0,Link::kUndef, Transform::getIdentity());
+		int priorId = sender() == ui_->toolButton_edit_priorA?ids_.at(ui_->horizontalSlider_A->value()):
+					  sender() == ui_->toolButton_edit_priorB?ids_.at(ui_->horizontalSlider_B->value()):0;
+		if(priorId>0)
 		{
-			int position = ui_->horizontalSlider_loops->value();
-			link = loopLinks_.at(position);
+			// Prior
+			std::multimap<int, rtabmap::Link> links = updateLinksWithModifications(links_);
+			if(graph::findLink(links, priorId, priorId, false, Link::kPosePrior) != links.end())
+			{
+				link = graph::findLink(links, priorId, priorId, false, Link::kPosePrior)->second;
+			}
+			else if(odomPoses_.find(priorId) != odomPoses_.end())
+			{
+				// fallback to odom pose
+				// set undef to go in "add" branch below
+				link = Link(priorId, priorId, Link::kUndef, odomPoses_.at(priorId));
+			}
+			else
+			{
+				QMessageBox::warning(this, tr(""), tr("Node %1 doesn't have odometry pose, cannot add a prior for it!").arg(priorId));
+				return;
+			}
+		}
+		else if(ui_->label_type->text().toInt() == Link::kLandmark)
+		{
+			link = loopLinks_.at(ui_->horizontalSlider_loops->value());
 		}
 		else
 		{
 			link = this->findActiveLink(ids_.at(ui_->horizontalSlider_A->value()), ids_.at(ui_->horizontalSlider_B->value()));
 		}
+		bool updated = false;
 		if(link.isValid())
 		{
 			cv::Mat covBefore = link.infMatrix().inv();
@@ -5999,7 +6054,6 @@ void DatabaseViewer::editConstraint()
 					covBefore.at<double>(5,5)<9999.0?std::sqrt(covBefore.at<double>(5,5)):0.0);
 			if(dialog.exec() == QDialog::Accepted)
 			{
-				bool updated = false;
 				cv::Mat covariance = cv::Mat::eye(6, 6, CV_64FC1);
 				if(dialog.getLinearVariance()>0)
 				{
@@ -6035,7 +6089,7 @@ void DatabaseViewer::editConstraint()
 					linksRefined_.insert(std::make_pair(newLink.from(), newLink));
 					updated = true;
 				}
-				if(updated)
+				if(priorId==0)
 				{
 					this->updateGraphView();
 					updateConstraintView();
@@ -6044,7 +6098,10 @@ void DatabaseViewer::editConstraint()
 		}
 		else
 		{
-			EditConstraintDialog dialog(Transform::getIdentity());
+			EditConstraintDialog dialog(
+				link.transform(),
+				priorId>0?0.001:1,
+				priorId>0?0.001:1);
 			if(dialog.exec() == QDialog::Accepted)
 			{
 				cv::Mat covariance = cv::Mat::eye(6, 6, CV_64FC1);
@@ -6064,12 +6121,12 @@ void DatabaseViewer::editConstraint()
 				{
 					covariance(cv::Range(3,6), cv::Range(3,6)) *= 9999.9;
 				}
-				int from = ids_.at(ui_->horizontalSlider_A->value());
-				int to = ids_.at(ui_->horizontalSlider_B->value());
+				int from = priorId>0?priorId:ids_.at(ui_->horizontalSlider_A->value());
+				int to = priorId>0?priorId:ids_.at(ui_->horizontalSlider_B->value());
 				Link newLink(
 						from,
 						to,
-						Link::kUserClosure,
+						priorId>0?Link::kPosePrior:Link::kUserClosure,
 						dialog.getTransform(),
 						covariance.inv());
 				if(newLink.from() < newLink.to())
@@ -6077,9 +6134,45 @@ void DatabaseViewer::editConstraint()
 					newLink = newLink.inverse();
 				}
 				linksAdded_.insert(std::make_pair(newLink.from(), newLink));
-				this->updateGraphView();
-				updateLoopClosuresSlider(from, to);
+				updated = true;
+				if(priorId==0)
+				{
+					this->updateGraphView();
+					updateLoopClosuresSlider(from, to);
+				}
 			}
+		}
+
+		if(updated && priorId>0)
+		{
+			bool priorsIgnored = Parameters::defaultOptimizerPriorsIgnored();
+			Parameters::parse(ui_->parameters_toolbox->getParameters(), Parameters::kOptimizerPriorsIgnored(), priorsIgnored);
+			if(priorsIgnored)
+			{
+				if(QMessageBox::question(this,
+					tr("Updating Prior"),
+					tr("Parameter %1 is true, do you want to turn it off to update the graph with the updated prior?").arg(Parameters::kOptimizerPriorsIgnored().c_str()),
+					QMessageBox::Yes | QMessageBox::No,
+					QMessageBox::Yes) == QMessageBox::Yes)
+				{
+					priorsIgnored = false;
+					ui_->parameters_toolbox->updateParameter(Parameters::kOptimizerPriorsIgnored(), "false");
+				}
+			}
+			int indexA = ui_->horizontalSlider_A->value();
+			int indexB = ui_->horizontalSlider_B->value();
+			if(!priorsIgnored)
+			{
+				this->updateGraphView();
+			}
+			if(ui_->horizontalSlider_A->value() != indexA)
+				ui_->horizontalSlider_A->setValue(indexA);
+			else
+				sliderAValueChanged(indexA);
+			if(ui_->horizontalSlider_B->value() != indexB)
+				ui_->horizontalSlider_B->setValue(indexB);
+			else
+				sliderBValueChanged(indexB);
 		}
 	}
 }
@@ -6238,6 +6331,8 @@ void DatabaseViewer::updateConstraintView(
 						ui_->label_scanA,
 						ui_->label_gravityA,
 						ui_->label_priorA,
+						ui_->toolButton_edit_priorA,
+						ui_->toolButton_remove_priorA,
 						ui_->label_gpsA,
 						ui_->label_gtA,
 						ui_->label_sensorsA,
@@ -6261,6 +6356,8 @@ void DatabaseViewer::updateConstraintView(
 						ui_->label_scanB,
 						ui_->label_gravityB,
 						ui_->label_priorB,
+						ui_->toolButton_edit_priorB,
+						ui_->toolButton_remove_priorB,
 						ui_->label_gpsB,
 						ui_->label_gtB,
 						ui_->label_sensorsB,
@@ -8931,9 +9028,12 @@ void DatabaseViewer::resetConstraint()
 
 void DatabaseViewer::rejectConstraint()
 {
-	int from = ids_.at(ui_->horizontalSlider_A->value());
-	int to = ids_.at(ui_->horizontalSlider_B->value());
-	if(ui_->label_type->text().toInt() == Link::kLandmark)
+	int priorId = sender() == ui_->toolButton_remove_priorA?ids_.at(ui_->horizontalSlider_A->value()):
+				  sender() == ui_->toolButton_remove_priorB?ids_.at(ui_->horizontalSlider_B->value()):0;
+
+	int from = priorId>0?priorId:ids_.at(ui_->horizontalSlider_A->value());
+	int to = priorId>0?priorId:ids_.at(ui_->horizontalSlider_B->value());
+	if(priorId==0 && ui_->label_type->text().toInt() == Link::kLandmark)
 	{
 		int position = ui_->horizontalSlider_loops->value();
 		const rtabmap::Link & link = loopLinks_.at(position);
@@ -8948,7 +9048,7 @@ void DatabaseViewer::rejectConstraint()
 		from = tmp;
 	}
 
-	if(from == to)
+	if(priorId==0 && from == to)
 	{
 		UWARN("Cannot reject link to same node");
 		return;
@@ -8990,9 +9090,31 @@ void DatabaseViewer::rejectConstraint()
 	}
 	if(removed)
 	{
-		this->updateGraphView();
+		if(priorId==0)
+		{
+			this->updateGraphView();
+			updateLoopClosuresSlider();
+		}
+		else
+		{
+			bool priorsIgnored = Parameters::defaultOptimizerPriorsIgnored();
+			Parameters::parse(ui_->parameters_toolbox->getParameters(), Parameters::kOptimizerPriorsIgnored(), priorsIgnored);
+			int indexA = ui_->horizontalSlider_A->value();
+			int indexB = ui_->horizontalSlider_B->value();
+			if(!priorsIgnored)
+			{
+				this->updateGraphView();
+			}
+			if(ui_->horizontalSlider_A->value() != indexA)
+				ui_->horizontalSlider_A->setValue(indexA);
+			else
+				sliderAValueChanged(indexA);
+			if(ui_->horizontalSlider_B->value() != indexB)
+				ui_->horizontalSlider_B->setValue(indexB);
+			else
+				sliderBValueChanged(indexB);
+		}
 	}
-	updateLoopClosuresSlider();
 }
 
 std::multimap<int, rtabmap::Link> DatabaseViewer::updateLinksWithModifications(
