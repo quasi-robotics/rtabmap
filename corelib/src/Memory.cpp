@@ -40,6 +40,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <rtabmap/core/EpipolarGeometry.h>
 #include "rtabmap/core/VisualWord.h"
 #include "rtabmap/core/Features2d.h"
+#include "rtabmap/core/GlobalDescriptorExtractor.h"
 #include "rtabmap/core/RegistrationIcp.h"
 #include "rtabmap/core/Registration.h"
 #include "rtabmap/core/RegistrationVis.h"
@@ -132,6 +133,7 @@ Memory::Memory(const ParametersMap & parameters) :
 	_feature2D = Feature2D::create(parameters);
 	_vwd = new VWDictionary(parameters);
 	_registrationPipeline = Registration::create(parameters);
+	_globalDescriptorExtractor = GlobalDescriptorExtractor::create(parameters);
 	if(!_registrationPipeline->isImageRequired())
 	{
 		// make sure feature matching is used instead of optical flow to compute the guess
@@ -761,6 +763,22 @@ void Memory::parseParameters(const ParametersMap & parameters)
 		_markerDetector->parseParameters(params);
 	}
 
+	int globalDescriptorStrategy = -1;
+	Parameters::parse(params, Parameters::kMemGlobalDescriptorStrategy(), globalDescriptorStrategy);
+	if(globalDescriptorStrategy != -1 &&
+			(_globalDescriptorExtractor==0 || (int)_globalDescriptorExtractor->getType() != globalDescriptorStrategy))
+	{
+		if(_globalDescriptorExtractor)
+		{
+			delete _globalDescriptorExtractor;
+		}
+		_globalDescriptorExtractor = GlobalDescriptorExtractor::create(parameters_);
+	}
+	else if(_globalDescriptorExtractor)
+	{
+		_globalDescriptorExtractor->parseParameters(params);
+	}
+
 	// do this after all params are parsed
 	// SLAM mode vs Localization mode
 	iter = params.find(Parameters::kMemIncrementalMemory());
@@ -1197,7 +1215,10 @@ void Memory::moveSignatureToWMFromSTM(int id, int * reducedTo)
 					}
 				}
 
-				this->moveToTrash(s, false);
+				// Setting true to make sure we save all visual
+				// words that could be referenced in a previously
+				// transferred node in LTM (#979)
+				this->moveToTrash(s, true);
 				s = 0;
 			}
 		}
@@ -2768,6 +2789,19 @@ void Memory::removeLink(int oldId, int newId)
 		else
 		{
 			UERROR("Signatures %d and %d don't have bidirectional link!", oldS->id(), newS->id());
+		}
+	}
+	else if(this->_getSignature(newId<0?oldId:newId))
+	{
+		int landmarkId = newId<0?newId:oldId;
+		Signature * s = this->_getSignature(newId<0?oldId:newId);
+		s->removeLandmark(newId<0?newId:oldId);
+		_linksChanged = true;
+		// Update landmark index
+		std::map<int, std::set<int> >::iterator nter = _landmarksIndex.find(landmarkId);
+		if(nter!=_landmarksIndex.end())
+		{
+			nter->second.erase(s->id());
 		}
 	}
 	else
@@ -5313,9 +5347,17 @@ Signature * Memory::createSignature(const SensorData & inputData, const Transfor
 		{
 			UASSERT((int)keypoints.size() == descriptors.rows);
 			int inliersCount = 0;
-			if(_feature2D->getGridRows() > 1 || _feature2D->getGridCols() > 1)
+			if((_feature2D->getGridRows() > 1 || _feature2D->getGridCols() > 1) &&
+				(decimatedData.cameraModels().size()==1 || decimatedData.stereoCameraModels().size()==1 ||
+				 data.cameraModels().size()==1 || data.stereoCameraModels().size()==1))
 			{
-				Feature2D::limitKeypoints(keypoints, inliers, _feature2D->getMaxFeatures(), decimatedData.imageRaw().size(), _feature2D->getGridRows(), _feature2D->getGridCols());
+				Feature2D::limitKeypoints(keypoints,
+						inliers,
+						_feature2D->getMaxFeatures(),
+						decimatedData.cameraModels().size()?decimatedData.cameraModels()[0].imageSize():
+						decimatedData.stereoCameraModels().size()?decimatedData.stereoCameraModels()[0].left().imageSize():
+						data.cameraModels().size()?data.cameraModels()[0].imageSize():data.stereoCameraModels()[0].left().imageSize(),
+						_feature2D->getGridRows(), _feature2D->getGridCols());
 				for(size_t i=0; i<inliers.size(); ++i)
 				{
 					if(inliers[i])
@@ -5326,6 +5368,11 @@ Signature * Memory::createSignature(const SensorData & inputData, const Transfor
 			}
 			else
 			{
+				if(_feature2D->getGridRows() > 1 || _feature2D->getGridCols() > 1)
+				{
+					UWARN("Ignored %s and %s parameters as they cannot be used for multi-cameras setup or uncalibrated camera.",
+							Parameters::kKpGridCols().c_str(), Parameters::kKpGridRows().c_str());
+				}
 				Feature2D::limitKeypoints(keypoints, inliers, _feature2D->getMaxFeatures());
 				inliersCount = _feature2D->getMaxFeatures();
 			}
@@ -5921,7 +5968,17 @@ Signature * Memory::createSignature(const SensorData & inputData, const Transfor
 	s->sensorData().setGroundTruth(data.groundTruth());
 	s->sensorData().setGPS(data.gps());
 	s->sensorData().setEnvSensors(data.envSensors());
-	s->sensorData().setGlobalDescriptors(data.globalDescriptors());
+
+	std::vector<GlobalDescriptor> globalDescriptors = data.globalDescriptors();
+	if(_globalDescriptorExtractor)
+	{
+		GlobalDescriptor gdescriptor = _globalDescriptorExtractor->extract(inputData);
+		if(!gdescriptor.data().empty())
+		{
+			globalDescriptors.push_back(gdescriptor);
+		}
+	}
+	s->sensorData().setGlobalDescriptors(globalDescriptors);
 
 	t = timer.ticks();
 	if(stats) stats->addStatistic(Statistics::kTimingMemCompressing_data(), t*1000.0f);

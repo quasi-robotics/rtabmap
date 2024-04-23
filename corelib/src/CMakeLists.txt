@@ -13,8 +13,10 @@ SET(SRC_FILES
     
     Recovery.cpp
     
+    SensorCapture.cpp
+    SensorCaptureThread.cpp
+    
     Camera.cpp
-    CameraThread.cpp
     CameraModel.cpp
     
     camera/CameraFreenect.cpp
@@ -38,6 +40,8 @@ SET(SRC_FILES
     camera/CameraVideo.cpp
     camera/CameraMyntEye.cpp
     camera/CameraDepthAI.cpp
+    
+    lidar/LidarVLP16.cpp
     
     EpipolarGeometry.cpp
     VisualWord.cpp
@@ -114,6 +118,8 @@ SET(SRC_FILES
     global_map/CloudMap.cpp
     
     MarkerDetector.cpp
+    
+    GlobalDescriptorExtractor.cpp
     
     GainCompensator.cpp
 
@@ -224,6 +230,7 @@ IF(WITH_PYTHON AND Python3_FOUND)
 		python/PythonInterface.cpp
 		python/PyMatcher.cpp
 		python/PyDetector.cpp
+		python/PyDescriptor.cpp
 	)
 	 SET(INCLUDE_DIRS
 	    ${TORCH_INCLUDE_DIRS}

@@ -231,6 +231,7 @@ class RTABMAP_CORE_EXPORT Parameters
     RTABMAP_PARAM(Mem, UseOdomFeatures,             bool, true,     "Use odometry features instead of regenerating them.");
     RTABMAP_PARAM(Mem, UseOdomGravity,              bool, false,    uFormat("Use odometry instead of IMU orientation to add gravity links to new nodes created. We assume that odometry is already aligned with gravity (e.g., we are using a VIO approach). Gravity constraints are used by graph optimization only if \"%s\" is not zero.", kOptimizerGravitySigma().c_str()));
     RTABMAP_PARAM(Mem, CovOffDiagIgnored,           bool, true,     "Ignore off diagonal values of the covariance matrix.");
+    RTABMAP_PARAM(Mem, GlobalDescriptorStrategy,    int, 0,        "Extract global descriptor from sensor data. 0=disabled, 1=PyDescriptor");
     RTABMAP_PARAM(Mem, RotateImagesUpsideUp,        bool, false,    "Rotate images so that upside is up if they are not already. This can be useful in case the robots don't have all same camera orientation but are using the same map, so that not rotation-invariant visual features can still be used across the fleet.");
 
     // KeypointMemory (Keypoint-based)
@@ -462,6 +463,7 @@ class RTABMAP_CORE_EXPORT Parameters
     RTABMAP_PARAM(Odom, ScanKeyFrameThr,        float, 0.9,   "[Geometry] Create a new keyframe when the number of ICP inliers drops under this ratio of points in last frame's scan. Setting the value to 0 means that a keyframe is created for each processed frame.");
     RTABMAP_PARAM(Odom, ImageDecimation,     unsigned int, 1, uFormat("Decimation of the RGB image before registration. If depth size is larger than decimated RGB size, depth is decimated to be always at most equal to RGB size. If %s is true and if depth is smaller than decimated RGB, depth may be interpolated to match RGB size for feature detection.", kVisDepthAsMask().c_str()));
     RTABMAP_PARAM(Odom, AlignWithGround,        bool, false,  "Align odometry with the ground on initialization.");
+    RTABMAP_PARAM(Odom, Deskewing,              bool, true,   "Lidar deskewing. If input lidar has time channel, it will be deskewed with a constant motion model (with IMU orientation and/or guess if provided).");
 
     // Odometry Frame-to-Map
     RTABMAP_PARAM(OdomF2M, MaxSize,             int, 2000,    "[Visual] Local map size: If > 0 (example 5000), the odometry will maintain a local map of X maximum words.");
@@ -725,6 +727,10 @@ class RTABMAP_CORE_EXPORT Parameters
 	RTABMAP_PARAM(GMS, WithScale,            bool, false,   "Take scale transformation into account.");
 	RTABMAP_PARAM(GMS, ThresholdFactor,      double, 6.0,   "The higher, the less matches.");
 
+	// Global descriptor approaches
+	RTABMAP_PARAM_STR(PyDescriptor, Path,    "",          "Path to python script file (see available ones in rtabmap/corelib/src/pydescriptor/*). See the header to see where the script should be used.");
+	RTABMAP_PARAM(PyDescriptor, Dim,         int, 4096,   "Descriptor dimension.");
+
     // ICP registration parameters
 #ifdef RTABMAP_POINTMATCHER
     RTABMAP_PARAM(Icp, Strategy,                  int, 1,       "ICP implementation: 0=Point Cloud Library, 1=libpointmatcher, 2=CCCoreLib (CloudCompare).");
@@ -747,6 +753,7 @@ class RTABMAP_CORE_EXPORT Parameters
     RTABMAP_PARAM(Icp, Epsilon,                   float, 0,     "Set the transformation epsilon (maximum allowable difference between two consecutive transformations) in order for an optimization to be considered as having converged to the final solution.");
     RTABMAP_PARAM(Icp, CorrespondenceRatio,       float, 0.1,   "Ratio of matching correspondences to accept the transform.");
     RTABMAP_PARAM(Icp, Force4DoF,                 bool, false,   uFormat("Limit ICP to x, y, z and yaw DoF. Available if %s > 0.", kIcpStrategy().c_str()));
+    RTABMAP_PARAM(Icp, FiltersEnabled,            int, 3,       "Flag to enable filters: 1=\"from\" cloud only, 2=\"to\" cloud only, 3=both.");
 #ifdef RTABMAP_POINTMATCHER
     RTABMAP_PARAM(Icp, PointToPlane,                bool, true,   "Use point to plane ICP.");
 #else
@@ -926,6 +933,7 @@ public:
     static ParametersMap filterParameters(const ParametersMap & parameters, const std::string & group, bool remove = false);
 
     static void readINI(const std::string & configFile, ParametersMap & parameters, bool modifiedOnly = false);
+    static void readINIStr(const std::string & configContent, ParametersMap & parameters, bool modifiedOnly = false);
     static void writeINI(const std::string & configFile, const ParametersMap & parameters);
 
     /**
