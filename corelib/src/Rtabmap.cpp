@@ -103,6 +103,7 @@ Rtabmap::Rtabmap() :
 	_maxMemoryAllowed(Parameters::defaultRtabmapMemoryThr()), // 0=inf
 	_loopThr(Parameters::defaultRtabmapLoopThr()),
 	_loopRatio(Parameters::defaultRtabmapLoopRatio()),
+	_virtualPlaceLikelihoodRatio(Parameters::defaultRtabmapVirtualPlaceLikelihoodRatio()),
 	_maxLoopClosureDistance(Parameters::defaultRGBDMaxLoopClosureDistance()),
 	_verifyLoopClosureHypothesis(Parameters::defaultVhEpEnabled()),
 	_maxRetrieved(Parameters::defaultRtabmapMaxRetrieved()),
@@ -567,6 +568,8 @@ void Rtabmap::parseParameters(const ParametersMap & parameters)
 	Parameters::parse(parameters, Parameters::kRtabmapMemoryThr(), _maxMemoryAllowed);
 	Parameters::parse(parameters, Parameters::kRtabmapLoopThr(), _loopThr);
 	Parameters::parse(parameters, Parameters::kRtabmapLoopRatio(), _loopRatio);
+	Parameters::parse(parameters, Parameters::kRtabmapVirtualPlaceLikelihoodRatio(), _virtualPlaceLikelihoodRatio);
+
 	Parameters::parse(parameters, Parameters::kRGBDMaxLoopClosureDistance(), _maxLoopClosureDistance);
 	Parameters::parse(parameters, Parameters::kVhEpEnabled(), _verifyLoopClosureHypothesis);
 	Parameters::parse(parameters, Parameters::kRtabmapMaxRetrieved(), _maxRetrieved);
@@ -2532,37 +2535,37 @@ bool Rtabmap::process(
 			// insert them first to make sure they are loaded.
 			reactivatedIds.insert(reactivatedIds.begin(), retrievalLocalIds.begin(), retrievalLocalIds.end());
 		}
-
-		//============================================================
-		// RETRIEVAL 3/3 : Load signatures from the database
-		//============================================================
-		if(reactivatedIds.size())
-		{
-			// Not important if the loop closure hypothesis don't have all its neighbors loaded,
-			// only a loop closure link is added...
-			signaturesRetrieved = _memory->reactivateSignatures(
-					reactivatedIds,
-					_maxRetrieved+(unsigned int)retrievalLocalIds.size(), // add path retrieved
-					timeRetrievalDbAccess);
-
-			ULOGGER_INFO("retrieval of %d (db time = %fs)", (int)signaturesRetrieved.size(), timeRetrievalDbAccess);
-
-			timeRetrievalDbAccess += timeGetNeighborsTimeDb + timeGetNeighborsSpaceDb;
-			UINFO("total timeRetrievalDbAccess=%fs", timeRetrievalDbAccess);
-
-			// Immunize just retrieved signatures
-			immunizedLocations.insert(signaturesRetrieved.begin(), signaturesRetrieved.end());
-
-			if(!signaturesRetrieved.empty() && !_globalScanMap.empty())
-			{
-				UWARN("Some signatures have been retrieved from memory management, clearing global scan map...");
-				_globalScanMap.clear();
-				_globalScanMapPoses.clear();
-			}
-		}
-		timeReactivations = timer.ticks();
-		ULOGGER_INFO("timeReactivations=%fs", timeReactivations);
 	}
+
+	//============================================================
+	// RETRIEVAL 3/3 : Load signatures from the database
+	//============================================================
+	if(reactivatedIds.size())
+	{
+		// Not important if the loop closure hypothesis don't have all its neighbors loaded,
+		// only a loop closure link is added...
+		signaturesRetrieved = _memory->reactivateSignatures(
+				reactivatedIds,
+				_maxRetrieved+(unsigned int)retrievalLocalIds.size(), // add path retrieved
+				timeRetrievalDbAccess);
+
+		ULOGGER_INFO("retrieval of %d (db time = %fs)", (int)signaturesRetrieved.size(), timeRetrievalDbAccess);
+
+		timeRetrievalDbAccess += timeGetNeighborsTimeDb + timeGetNeighborsSpaceDb;
+		UINFO("total timeRetrievalDbAccess=%fs", timeRetrievalDbAccess);
+
+		// Immunize just retrieved signatures
+		immunizedLocations.insert(signaturesRetrieved.begin(), signaturesRetrieved.end());
+
+		if(!signaturesRetrieved.empty() && !_globalScanMap.empty())
+		{
+			UWARN("Some signatures have been retrieved from memory management, clearing global scan map...");
+			_globalScanMap.clear();
+			_globalScanMapPoses.clear();
+		}
+	}
+	timeReactivations = timer.ticks();
+	ULOGGER_INFO("timeReactivations=%fs", timeReactivations);
 
 	//============================================================
 	// Proximity detections
@@ -4739,6 +4742,16 @@ void Rtabmap::setTimeThreshold(float maxTimeAllowed)
 		ULOGGER_WARN("Time threshold set to %fms, it is not in seconds!", _maxTimeAllowed);
 	}
 }
+void Rtabmap::setMemoryThreshold(int maxMemoryAllowed)
+{
+	//must be positive, 0 mean inf memory allowed (no memory limit)
+	_maxMemoryAllowed = maxMemoryAllowed;
+	if(_maxMemoryAllowed < 0)
+	{
+		ULOGGER_WARN("maxMemoryAllowed < 0, then setting it to 0 (inf).");
+		_maxMemoryAllowed = 0;
+	}
+}
 
 void Rtabmap::setWorkingDirectory(std::string path)
 {
@@ -5271,33 +5284,33 @@ void Rtabmap::adjustLikelihood(std::map<int, float> & likelihood) const
 	for(std::map<int, float>::iterator iter=++likelihood.begin(); iter!= likelihood.end(); ++iter)
 	{
 		float value = iter->second;
-		if(value > mean+stdDev && mean)
+		iter->second = 1.0f;
+		if(value > mean+stdDev)
 		{
-			iter->second = (value-(stdDev-epsilon))/mean;
-			if(value > max)
+			if(_virtualPlaceLikelihoodRatio==0 && mean)
 			{
-				max = value;
-				maxId = iter->first;
+				iter->second = (value-(stdDev-epsilon))/mean;
+			}
+			else if(_virtualPlaceLikelihoodRatio!=0 && stdDev)
+			{
+				iter->second = (value-mean)/stdDev;
 			}
 		}
-		else if(value == 1.0f && stdDev == 0)
+
+		if(value > max)
 		{
-			iter->second = 1.0f;
-			if(value > max)
-			{
-				max = value;
-				maxId = iter->first;
-			}
-		}
-		else
-		{
-			iter->second = 1.0f;
+			max = value;
+			maxId = iter->first;
 		}
 	}
 
-	if(stdDev > epsilon && max)
+	if(_virtualPlaceLikelihoodRatio==0 && stdDev > epsilon && max)
 	{
 		likelihood.begin()->second = mean/stdDev + 1.0f;
+	}
+	else if(_virtualPlaceLikelihoodRatio!=0 && max > mean)
+	{
+		likelihood.begin()->second = stdDev/(max-mean) + 1.0f;
 	}
 	else
 	{

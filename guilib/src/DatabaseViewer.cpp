@@ -1729,7 +1729,7 @@ void DatabaseViewer::updateIds()
 	UINFO("Loading all IDs...");
 	std::set<int> ids;
 	dbDriver_->getAllNodeIds(ids);
-#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+#if QT_VERSION >= QT_VERSION_CHECK(5, 15, 3)
 	ids_ = QList<int>(ids.begin(), ids.end());
 #else
 	ids_ = QList<int>::fromStdList(std::list<int>(ids.begin(), ids.end()));
@@ -3960,7 +3960,7 @@ void DatabaseViewer::regenerateCurrentLocalMaps()
 	QSet<int> idsSet;
 	idsSet.insert(ids_.at(ui_->horizontalSlider_A->value()));
 	idsSet.insert(ids_.at(ui_->horizontalSlider_B->value()));
-#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+#if QT_VERSION >= QT_VERSION_CHECK(5, 15, 3)
 	QList<int> ids(idsSet.begin(), idsSet.end());
 #else
 	QList<int> ids = idsSet.toList();
@@ -5732,6 +5732,7 @@ void DatabaseViewer::updateStereo(const SensorData * data)
 		// generate kpts
 		std::vector<cv::KeyPoint> kpts;
 		uInsert(parameters, ParametersPair(Parameters::kKpMaxFeatures(), parameters.at(Parameters::kVisMaxFeatures())));
+		uInsert(parameters, ParametersPair(Parameters::kKpSSC(), parameters.at(Parameters::kVisSSC())));
 		uInsert(parameters, ParametersPair(Parameters::kKpMinDepth(), parameters.at(Parameters::kVisMinDepth())));
 		uInsert(parameters, ParametersPair(Parameters::kKpMaxDepth(), parameters.at(Parameters::kVisMaxDepth())));
 		uInsert(parameters, ParametersPair(Parameters::kKpDetectorStrategy(), parameters.at(Parameters::kVisFeatureType())));

@@ -241,6 +241,7 @@ void SensorCaptureThread::enableFeatureDetection(const ParametersMap & parameter
 	ParametersMap defaultParams = Parameters::getDefaultParameters("Vis");
 	uInsert(params, ParametersPair(Parameters::kKpDetectorStrategy(), uValue(params, Parameters::kVisFeatureType(), defaultParams.at(Parameters::kVisFeatureType()))));
 	uInsert(params, ParametersPair(Parameters::kKpMaxFeatures(), uValue(params, Parameters::kVisMaxFeatures(), defaultParams.at(Parameters::kVisMaxFeatures()))));
+	uInsert(params, ParametersPair(Parameters::kKpSSC(), uValue(params, Parameters::kVisSSC(), defaultParams.at(Parameters::kVisSSC()))));
 	uInsert(params, ParametersPair(Parameters::kKpMaxDepth(), uValue(params, Parameters::kVisMaxDepth(), defaultParams.at(Parameters::kVisMaxDepth()))));
 	uInsert(params, ParametersPair(Parameters::kKpMinDepth(), uValue(params, Parameters::kVisMinDepth(), defaultParams.at(Parameters::kVisMinDepth()))));
 	uInsert(params, ParametersPair(Parameters::kKpRoiRatios(), uValue(params, Parameters::kVisRoiRatios(), defaultParams.at(Parameters::kVisRoiRatios()))));
@@ -335,8 +336,7 @@ void SensorCaptureThread::mainLoop()
 		data = _lidar->takeData(&info);
 		if(data.stamp() == 0.0)
 		{
-			UERROR("Could not capture scan! Skipping this frame!");
-            return;
+			UWARN("Could not capture scan!");
 		}
 		else
 		{
@@ -346,8 +346,7 @@ void SensorCaptureThread::mainLoop()
 				cameraData = _camera->takeData();
 				if(cameraData.stamp() == 0.0)
 				{
-					UERROR("Could not capture image! Skipping this frame!");
-                    return;
+					UWARN("Could not capture image!");
 				}
 				else
 				{
@@ -389,8 +388,7 @@ void SensorCaptureThread::mainLoop()
 		data = _camera->takeData(&info);
 		if(data.stamp() == 0.0)
 		{
-			UERROR("Could not capture image! Skipping this frame!");
-            return;
+			UWARN("Could not capture image!");
 		}
 		else
 		{
@@ -450,10 +448,9 @@ void SensorCaptureThread::mainLoop()
 						data.setLaserScan(scanDeskewed);
 					}
 				}
-				else
+				else if(!data.laserScanRaw().empty())
 				{
-					UWARN("Failed to get poses for stamps %f and %f! Skipping this frame!", firstStamp+_poseTimeOffset, lastStamp+_poseTimeOffset);
-                    return;
+					UWARN("Failed to get poses for stamps %f and %f! Lidar won't be deskewed!", firstStamp+_poseTimeOffset, lastStamp+_poseTimeOffset);
 				}
 			}
 			else if(!data.laserScanRaw().empty())
