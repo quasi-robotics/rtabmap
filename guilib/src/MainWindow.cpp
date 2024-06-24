@@ -469,8 +469,11 @@ MainWindow::MainWindow(PreferencesDialog * prefDialog, QWidget * parent, bool sh
 	connect(_ui->actionDepthAI_oakd, SIGNAL(triggered()), this, SLOT(selectDepthAIOAKD()));
 	connect(_ui->actionDepthAI_oakdlite, SIGNAL(triggered()), this, SLOT(selectDepthAIOAKDLite()));
 	connect(_ui->actionDepthAI_oakdpro, SIGNAL(triggered()), this, SLOT(selectDepthAIOAKDPro()));
+	connect(_ui->actionXvisio_SeerSense, SIGNAL(triggered()), this, SLOT(selectXvisioSeerSense()));
 	connect(_ui->actionVelodyne_VLP_16, SIGNAL(triggered()), this, SLOT(selectVLP16()));
 	_ui->actionFreenect->setEnabled(CameraFreenect::available());
+	_ui->actionOpenNI_PCL->setEnabled(CameraOpenni::available());
+	_ui->actionOpenNI_PCL_ASUS->setEnabled(CameraOpenni::available());
 	_ui->actionOpenNI_CV->setEnabled(CameraOpenNICV::available());
 	_ui->actionOpenNI_CV_ASUS->setEnabled(CameraOpenNICV::available());
 	_ui->actionOpenNI2->setEnabled(CameraOpenNI2::available());
@@ -495,6 +498,7 @@ MainWindow::MainWindow(PreferencesDialog * prefDialog, QWidget * parent, bool sh
     _ui->actionDepthAI_oakd->setEnabled(CameraDepthAI::available());
     _ui->actionDepthAI_oakdlite->setEnabled(CameraDepthAI::available());
     _ui->actionDepthAI_oakdpro->setEnabled(CameraDepthAI::available());
+	_ui->actionXvisio_SeerSense->setEnabled(CameraSeerSense::available());
 	this->updateSelectSourceMenu();
 
 	connect(_ui->actionPreferences, SIGNAL(triggered()), this, SLOT(openPreferences()));
@@ -5299,6 +5303,7 @@ void MainWindow::updateSelectSourceMenu()
 	_ui->actionDepthAI_oakd->setChecked(_preferencesDialog->getSourceDriver() == PreferencesDialog::kSrcStereoDepthAI);
 	_ui->actionDepthAI_oakdlite->setChecked(_preferencesDialog->getSourceDriver() == PreferencesDialog::kSrcStereoDepthAI);
 	_ui->actionDepthAI_oakdpro->setChecked(_preferencesDialog->getSourceDriver() == PreferencesDialog::kSrcStereoDepthAI);
+	_ui->actionXvisio_SeerSense->setChecked(_preferencesDialog->getSourceDriver() == PreferencesDialog::kSrcSeerSense);
 	_ui->actionVelodyne_VLP_16->setChecked(_preferencesDialog->getLidarSourceDriver() == PreferencesDialog::kSrcLidarVLP16);
 }
 
@@ -7226,6 +7231,11 @@ void MainWindow::selectDepthAIOAKDLite()
 void MainWindow::selectDepthAIOAKDPro()
 {
 	_preferencesDialog->selectSourceDriver(PreferencesDialog::kSrcStereoDepthAI, 2); // variant 2=IMU+color
+}
+
+void MainWindow::selectXvisioSeerSense()
+{
+	_preferencesDialog->selectSourceDriver(PreferencesDialog::kSrcSeerSense);
 }
 
 void MainWindow::selectVLP16()
