@@ -351,6 +351,11 @@ DatabaseViewer::DatabaseViewer(const QString & ini, QWidget * parent) :
 	connect(ui_->horizontalSlider_B, SIGNAL(valueChanged(int)), this, SLOT(sliderBValueChanged(int)));
 	connect(ui_->horizontalSlider_A, SIGNAL(sliderMoved(int)), this, SLOT(sliderAMoved(int)));
 	connect(ui_->horizontalSlider_B, SIGNAL(sliderMoved(int)), this, SLOT(sliderBMoved(int)));
+	ui_->spinBox_indexA->setEnabled(false);
+	ui_->spinBox_indexB->setEnabled(false);
+	connect(ui_->spinBox_indexA, SIGNAL(valueChanged(int)), this, SLOT(sliderAValueChanged(int)));
+	connect(ui_->spinBox_indexB, SIGNAL(valueChanged(int)), this, SLOT(sliderBValueChanged(int)));
+
 	connect(ui_->toolButton_edit_priorA, SIGNAL(clicked(bool)), this, SLOT(editConstraint()));
 	connect(ui_->toolButton_edit_priorB, SIGNAL(clicked(bool)), this, SLOT(editConstraint()));
 	connect(ui_->toolButton_remove_priorA, SIGNAL(clicked(bool)), this, SLOT(rejectConstraint()));
@@ -582,6 +587,7 @@ void DatabaseViewer::readSettings()
 
 	// GraphViewer settings
 	ui_->graphViewer->loadSettings(settings, "GraphView");
+	ui_->graphViewer->setReferentialVisible(false);
 
 	settings.beginGroup("optimization");
 	ui_->doubleSpinBox_gainCompensationRadius->setValue(settings.value("gainCompensationRadius", ui_->doubleSpinBox_gainCompensationRadius->value()).toDouble());
@@ -1155,6 +1161,11 @@ bool DatabaseViewer::closeDatabase()
 		ui_->label_idB->setText("NaN");
 		sliderAValueChanged(0);
 		sliderBValueChanged(0);
+
+		ui_->spinBox_indexA->setEnabled(false);
+		ui_->spinBox_indexA->setMaximum(0);
+		ui_->spinBox_indexB->setEnabled(false);
+		ui_->spinBox_indexB->setMaximum(0);
 
 		constraintsViewer_->clear();
 		constraintsViewer_->refreshView();
@@ -1863,7 +1874,6 @@ void DatabaseViewer::updateIds()
 		if(wmStates.find(ids_[i]) != wmStates.end())
 		{
 			wmStates_.insert(std::make_pair(ids_[i], wmStates.at(ids_[i])));
-			ui_->checkBox_wmState->setVisible(true);
 		}
 		if(w < 0)
 		{
@@ -1941,6 +1951,8 @@ void DatabaseViewer::updateIds()
 			gpsPoses_.insert(std::make_pair(ids_[i], pose));
 		}
 	}
+
+	ui_->checkBox_wmState->setVisible(!wmStates_.empty() || !lastWmIds_.empty());
 
 	progressDialog->appendText("Loading info for all nodes... done!");
 	progressDialog->incrementStep();
@@ -2096,30 +2108,16 @@ void DatabaseViewer::updateIds()
 	ui_->menuExport_poses->setEnabled(!odomPoses_.empty());
 	graphes_.clear();
 	graphLinks_.clear();
-	neighborLinks_.clear();
-	loopLinks_.clear();
-	for(std::multimap<int, rtabmap::Link>::iterator iter = links_.begin(); iter!=links_.end(); ++iter)
-	{
-		if(!iter->second.transform().isNull())
-		{
-			if(iter->second.type() == rtabmap::Link::kNeighbor ||
-			   iter->second.type() == rtabmap::Link::kNeighborMerged)
-			{
-				neighborLinks_.append(iter->second);
-			}
-			else if(iter->second.from()!=iter->second.to())
-			{
-				loopLinks_.append(iter->second);
-			}
-		}
-		else
-		{
-			UERROR("Transform null for link from %d to %d", iter->first, iter->second.to());
-		}
-	}
 
 	if(ids_.size())
 	{
+		ui_->spinBox_indexA->setMinimum(0);
+		ui_->spinBox_indexB->setMinimum(0);
+		ui_->spinBox_indexA->setMaximum(ids_.size()-1);
+		ui_->spinBox_indexB->setMaximum(ids_.size()-1);
+		ui_->spinBox_indexA->setEnabled(true);
+		ui_->spinBox_indexB->setEnabled(true);
+
 		ui_->horizontalSlider_A->setMinimum(0);
 		ui_->horizontalSlider_B->setMinimum(0);
 		ui_->horizontalSlider_A->setMaximum(ids_.size()-1);
@@ -2135,24 +2133,17 @@ void DatabaseViewer::updateIds()
 	{
 		ui_->horizontalSlider_A->setEnabled(false);
 		ui_->horizontalSlider_B->setEnabled(false);
+
+		ui_->spinBox_indexA->setEnabled(false);
+		ui_->spinBox_indexB->setEnabled(false);
+
 		ui_->label_idA->setText("NaN");
 		ui_->label_idB->setText("NaN");
 	}
 
-	if(neighborLinks_.size())
-	{
-		ui_->horizontalSlider_neighbors->setMinimum(0);
-		ui_->horizontalSlider_neighbors->setMaximum(neighborLinks_.size()-1);
-		ui_->horizontalSlider_neighbors->setEnabled(true);
-		ui_->horizontalSlider_neighbors->setSliderPosition(0);
-	}
-	else
-	{
-		ui_->horizontalSlider_neighbors->setEnabled(false);
-	}
-
 	if(ids_.size())
 	{
+		updateNeighborsSlider();
 		updateLoopClosuresSlider();
 		if(ui_->graphViewer->isVisible() || ui_->dockWidget_occupancyGridView->isVisible())
 		{
@@ -4326,28 +4317,43 @@ void DatabaseViewer::detectMoreLoopClosures()
 
 void DatabaseViewer::updateAllNeighborCovariances()
 {
-	updateCovariances(neighborLinks_);
+	std::multimap<int, Link> allLinks = updateLinksWithModifications(links_);
+	QList<rtabmap::Link> links;
+	for(std::multimap<int, Link>::iterator iter=allLinks.begin(); iter!=allLinks.end(); ++iter)
+	{
+		if(iter->second.type() == Link::kNeighbor ||
+		   iter->second.type() == Link::kNeighborMerged)
+		{
+			links.push_back(iter->second);
+		}
+	}
+	updateCovariances(links);
 }
 void DatabaseViewer::updateAllLoopClosureCovariances()
 {
+	std::multimap<int, Link> allLinks = updateLinksWithModifications(links_);
 	QList<rtabmap::Link> links;
-	for(int i=0; i<loopLinks_.size(); ++i)
+	for(std::multimap<int, Link>::iterator iter=allLinks.begin(); iter!=allLinks.end(); ++iter)
 	{
-		if(loopLinks_.at(i).type() != Link::kLandmark)
+		if(iter->second.type() != Link::kNeighbor &&
+		   iter->second.type() != Link::kNeighborMerged &&
+		   iter->second.type() != Link::kLandmark &&
+		   iter->second.from() != iter->second.to())
 		{
-			links.push_back(loopLinks_.at(i));
+			links.push_back(iter->second);
 		}
 	}
 	updateCovariances(links);
 }
 void DatabaseViewer::updateAllLandmarkCovariances()
 {
+	std::multimap<int, Link> allLinks = updateLinksWithModifications(links_);
 	QList<rtabmap::Link> links;
-	for(int i=0; i<loopLinks_.size(); ++i)
+	for(std::multimap<int, Link>::iterator iter=allLinks.begin(); iter!=allLinks.end(); ++iter)
 	{
-		if(loopLinks_.at(i).type() == Link::kLandmark)
+		if(iter->second.type() == Link::kLandmark)
 		{
-			links.push_back(loopLinks_.at(i));
+			links.push_back(iter->second);
 		}
 	}
 	updateCovariances(links);
@@ -4357,13 +4363,13 @@ void DatabaseViewer::updateCovariances(const QList<Link> & links)
 {
 	if(links.size())
 	{
-		bool ok = false;
-		double stddev = QInputDialog::getDouble(this, tr("Linear error"), tr("Std deviation (m) 0=inf"), 0.01, 0.0, 9, 4, &ok);
-		if(!ok) return;
-		double linearVar = stddev*stddev;
-		stddev = QInputDialog::getDouble(this, tr("Angular error"), tr("Std deviation (deg) 0=inf"), 1, 0.0, 90, 2, &ok)*M_PI/180.0;
-		if(!ok) return;
-		double angularVar = stddev*stddev;
+		cv::Mat infMatrix =  links.first().infMatrix();	
+		EditConstraintDialog dialog(Transform::getIdentity(), infMatrix.inv());
+		dialog.setPoseGroupVisible(false);
+		if(dialog.exec() != QDialog::Accepted)
+		{
+			return;
+		}
 
 		rtabmap::ProgressDialog * progressDialog = new rtabmap::ProgressDialog(this);
 		progressDialog->setAttribute(Qt::WA_DeleteOnClose);
@@ -4372,23 +4378,7 @@ void DatabaseViewer::updateCovariances(const QList<Link> & links)
 		progressDialog->setMinimumWidth(800);
 		progressDialog->show();
 
-		cv::Mat infMatrix = cv::Mat::eye(6,6,CV_64FC1);
-		if(linearVar == 0.0)
-		{
-			infMatrix(cv::Range(0,3), cv::Range(0,3)) /= 9999.9;
-		}
-		else
-		{
-			infMatrix(cv::Range(0,3), cv::Range(0,3)) /= linearVar;
-		}
-		if(angularVar == 0.0)
-		{
-			infMatrix(cv::Range(3,6), cv::Range(3,6)) /= 9999.9;
-		}
-		else
-		{
-			infMatrix(cv::Range(3,6), cv::Range(3,6)) /= angularVar;
-		}
+		infMatrix = dialog.getCovariance().inv();
 
 		for(int i=0; i<links.size(); ++i)
 		{
@@ -4564,6 +4554,7 @@ void DatabaseViewer::resetAllChanges()
 		linksRemoved_.clear();
 		generatedLocalMaps_.clear();
 		modifiedLaserScans_.clear();
+		updateNeighborsSlider();
 		updateLoopClosuresSlider();
 		this->updateGraphView();
 	}
@@ -4593,7 +4584,7 @@ void DatabaseViewer::graphLinkSelected(int from, int to)
 void DatabaseViewer::sliderAValueChanged(int value)
 {
 	this->update(value,
-			ui_->label_indexA,
+			ui_->spinBox_indexA,
 			ui_->label_parentsA,
 			ui_->label_childrenA,
 			ui_->label_weightA,
@@ -4620,7 +4611,7 @@ void DatabaseViewer::sliderAValueChanged(int value)
 void DatabaseViewer::sliderBValueChanged(int value)
 {
 	this->update(value,
-			ui_->label_indexB,
+			ui_->spinBox_indexB,
 			ui_->label_parentsB,
 			ui_->label_childrenB,
 			ui_->label_weightB,
@@ -4645,7 +4636,7 @@ void DatabaseViewer::sliderBValueChanged(int value)
 }
 
 void DatabaseViewer::update(int value,
-						QLabel * labelIndex,
+						QSpinBox * spinBoxIndex,
 						QLabel * labelParents,
 						QLabel * labelChildren,
 						QLabel * weight,
@@ -4671,7 +4662,9 @@ void DatabaseViewer::update(int value,
 	lastSliderIndexBrowsed_ = value;
 
 	UTimer timer;
-	labelIndex->setText(QString::number(value));
+	spinBoxIndex->blockSignals(true);
+	spinBoxIndex->setValue(value);
+	spinBoxIndex->blockSignals(false);
 	labelParents->clear();
 	labelChildren->clear();
 	weight->clear();
@@ -4698,6 +4691,10 @@ void DatabaseViewer::update(int value,
 		labelId->setText(QString::number(id));
 		if(id>0)
 		{
+			if(ui_->dockWidget_graphView->isVisible()) {
+				ui_->graphViewer->highlightNode(id, spinBoxIndex==ui_->spinBox_indexB?1:0);
+			}
+
 			//image
 			QImage img;
 			cv::Mat imgDepth;
@@ -4761,6 +4758,25 @@ void DatabaseViewer::update(int value,
 				else
 				{
 					ULOGGER_DEBUG("Image depth is empty");
+				}
+				if(!rect.isValid())
+				{
+					if(data.cameraModels().size())
+					{
+						for(unsigned int i=0; i<data.cameraModels().size(); ++i)
+						{
+							rect.setWidth(rect.width()+data.cameraModels()[i].imageWidth());
+							rect.setHeight(std::max((int)rect.height(), data.cameraModels()[i].imageHeight()));
+						}
+					}
+					else if(data.stereoCameraModels().size())
+					{
+						for(unsigned int i=0; i<data.cameraModels().size(); ++i)
+						{
+							rect.setWidth(rect.width()+data.stereoCameraModels()[i].left().imageWidth());
+							rect.setHeight(std::max((int)rect.height(), data.stereoCameraModels()[i].left().imageHeight()));
+						}
+					}
 				}
 				if(rect.isValid())
 				{
@@ -5973,7 +5989,9 @@ void DatabaseViewer::updateWordsMatching(const std::vector<int> & inliers)
 
 void DatabaseViewer::sliderAMoved(int value)
 {
-	ui_->label_indexA->setText(QString::number(value));
+	ui_->spinBox_indexA->blockSignals(true);
+	ui_->spinBox_indexA->setValue(value);
+	ui_->spinBox_indexA->blockSignals(false);
 	if(value>=0 && value < ids_.size())
 	{
 		ui_->label_idA->setText(QString::number(ids_.at(value)));
@@ -5986,7 +6004,9 @@ void DatabaseViewer::sliderAMoved(int value)
 
 void DatabaseViewer::sliderBMoved(int value)
 {
-	ui_->label_indexB->setText(QString::number(value));
+	ui_->spinBox_indexB->blockSignals(true);
+	ui_->spinBox_indexB->setValue(value);
+	ui_->spinBox_indexB->blockSignals(false);
 	if(value>=0 && value < ids_.size())
 	{
 		ui_->label_idB->setText(QString::number(ids_.at(value)));
@@ -6055,6 +6075,11 @@ void DatabaseViewer::editConstraint()
 		else if(ui_->label_type->text().toInt() == Link::kLandmark)
 		{
 			link = loopLinks_.at(ui_->horizontalSlider_loops->value());
+			std::multimap<int, Link>::iterator findIter = rtabmap::graph::findLink(linksRefined_, link.from() ,link.to(), false, link.type());
+			if(findIter != linksRefined_.end())
+			{
+				link = findIter->second;
+			}
 		}
 		else
 		{
@@ -6064,28 +6089,10 @@ void DatabaseViewer::editConstraint()
 		if(link.isValid())
 		{
 			cv::Mat covBefore = link.infMatrix().inv();
-			EditConstraintDialog dialog(link.transform(),
-					covBefore.at<double>(0,0)<9999.0?std::sqrt(covBefore.at<double>(0,0)):0.0,
-					covBefore.at<double>(5,5)<9999.0?std::sqrt(covBefore.at<double>(5,5)):0.0);
+			EditConstraintDialog dialog(link.transform(), covBefore);
 			if(dialog.exec() == QDialog::Accepted)
 			{
-				cv::Mat covariance = cv::Mat::eye(6, 6, CV_64FC1);
-				if(dialog.getLinearVariance()>0)
-				{
-					covariance(cv::Range(0,3), cv::Range(0,3)) *= dialog.getLinearVariance();
-				}
-				else
-				{
-					covariance(cv::Range(0,3), cv::Range(0,3)) *= 9999.9;
-				}
-				if(dialog.getAngularVariance()>0)
-				{
-					covariance(cv::Range(3,6), cv::Range(3,6)) *= dialog.getAngularVariance();
-				}
-				else
-				{
-					covariance(cv::Range(3,6), cv::Range(3,6)) *= 9999.9;
-				}
+				cv::Mat covariance = dialog.getCovariance();
 				Link newLink(link.from(), link.to(), link.type(), dialog.getTransform(), covariance.inv());
 				std::multimap<int, Link>::iterator iter = linksRefined_.find(link.from());
 				while(iter != linksRefined_.end() && iter->first == link.from())
@@ -6114,28 +6121,10 @@ void DatabaseViewer::editConstraint()
 		else
 		{
 			EditConstraintDialog dialog(
-				link.transform(),
-				priorId>0?0.001:1,
-				priorId>0?0.001:1);
+				link.transform(), cv::Mat::eye(6,6,CV_64FC1) * (priorId>0?0.00001:1));
 			if(dialog.exec() == QDialog::Accepted)
 			{
-				cv::Mat covariance = cv::Mat::eye(6, 6, CV_64FC1);
-				if(dialog.getLinearVariance()>0)
-				{
-					covariance(cv::Range(0,3), cv::Range(0,3)) *= dialog.getLinearVariance();
-				}
-				else
-				{
-					covariance(cv::Range(0,3), cv::Range(0,3)) *= 9999.9;
-				}
-				if(dialog.getAngularVariance()>0)
-				{
-					covariance(cv::Range(3,6), cv::Range(3,6)) *= dialog.getAngularVariance();
-				}
-				else
-				{
-					covariance(cv::Range(3,6), cv::Range(3,6)) *= 9999.9;
-				}
+				cv::Mat covariance = dialog.getCovariance();
 				int from = priorId>0?priorId:ids_.at(ui_->horizontalSlider_A->value());
 				int to = priorId>0?priorId:ids_.at(ui_->horizontalSlider_B->value());
 				Link newLink(
@@ -6330,7 +6319,7 @@ void DatabaseViewer::updateConstraintView(
 		ui_->horizontalSlider_B->blockSignals(false);
 		if(link.from()>0)
 			this->update(idToIndex_.value(link.from()),
-						ui_->label_indexA,
+						ui_->spinBox_indexA,
 						ui_->label_parentsA,
 						ui_->label_childrenA,
 						ui_->label_weightA,
@@ -6355,7 +6344,7 @@ void DatabaseViewer::updateConstraintView(
 		if(link.to()>0)
 		{
 			this->update(idToIndex_.value(link.to()),
-						ui_->label_indexB,
+						ui_->spinBox_indexB,
 						ui_->label_parentsB,
 						ui_->label_childrenB,
 						ui_->label_weightB,
@@ -7070,7 +7059,9 @@ void DatabaseViewer::sliderIterationsValueChanged(int value)
 		ui_->graphViewer->updateGTGraph(groundTruthPoses_);
 		ui_->graphViewer->updateGPSGraph(gpsPoses_, gpsValues_);
 		ui_->graphViewer->updateGraph(graph, graphLinks_, mapIds_, weights_);
-		if(!ui_->checkBox_wmState->isChecked())
+		if(ui_->checkBox_wmState->isEnabled() &&
+		   ui_->checkBox_wmState->isChecked() &&
+		   !lastWmIds_.empty())
 		{
 			bool allNodesAreInWM = true;
 			std::map<int, float> colors;
@@ -7375,7 +7366,9 @@ void DatabaseViewer::updateGraphView()
 		graphLinks_.clear();
 
 		std::map<int, rtabmap::Transform> poses = odomPoses_;
-		if(ui_->checkBox_wmState->isChecked() && uContains(wmStates_, fromId))
+		if(ui_->checkBox_wmState->isEnabled() &&
+		   ui_->checkBox_wmState->isChecked() &&
+		   uContains(wmStates_, fromId))
 		{
 			std::map<int, rtabmap::Transform> wmPoses;
 			std::vector<int> & wmState = wmStates_.at(fromId);
@@ -7416,7 +7409,6 @@ void DatabaseViewer::updateGraphView()
 
 		ui_->menuExport_poses->setEnabled(true);
 		std::multimap<int, rtabmap::Link> links = links_;
-		loopLinks_.clear();
 
 		// filter current map if not spanning to all maps
 		if(!ui_->checkBox_spanAllMaps->isChecked() && uContains(mapIds_, fromId) && mapIds_.at(fromId) >= 0)
@@ -7539,7 +7531,6 @@ void DatabaseViewer::updateGraphView()
 					links.erase(iter++);
 					continue;
 				}
-				loopLinks_.push_back(iter->second);
 				if(isUnique)
 					++totalGlobal;
 			}
@@ -7550,7 +7541,6 @@ void DatabaseViewer::updateGraphView()
 					links.erase(iter++);
 					continue;
 				}
-				loopLinks_.push_back(iter->second);
 				if(isUnique)
 					++totalLocalSpace;
 			}
@@ -7561,7 +7551,6 @@ void DatabaseViewer::updateGraphView()
 					links.erase(iter++);
 					continue;
 				}
-				loopLinks_.push_back(iter->second);
 				if(isUnique)
 					++totalLocalTime;
 			}
@@ -7572,7 +7561,6 @@ void DatabaseViewer::updateGraphView()
 					links.erase(iter++);
 					continue;
 				}
-				loopLinks_.push_back(iter->second);
 				if(isUnique)
 					++totalUser;
 			}
@@ -7588,7 +7576,6 @@ void DatabaseViewer::updateGraphView()
 				{
 					poses.insert(std::make_pair(iter->second.to(), poses.at(iter->second.from())*iter->second.transform()));
 				}
-				loopLinks_.push_back(iter->second);
 				if(isUnique)
 					++totalLandmarks;
 
@@ -7616,10 +7603,6 @@ void DatabaseViewer::updateGraphView()
 				if(isUnique)
 					++totalGravity;
 			}
-			else
-			{
-				loopLinks_.push_back(iter->second);
-			}
 			++iter;
 		}
 		updateLoopClosuresSlider();
@@ -7637,6 +7620,7 @@ void DatabaseViewer::updateGraphView()
 
 		// remove intermediate nodes?
 		if(ui_->checkBox_ignoreIntermediateNodes->isVisible() &&
+		   ui_->checkBox_ignoreIntermediateNodes->isEnabled() &&
 		   ui_->checkBox_ignoreIntermediateNodes->isChecked())
 		{
 			for(std::multimap<int, Link>::iterator iter=links.begin(); iter!=links.end(); ++iter)
@@ -9108,7 +9092,6 @@ void DatabaseViewer::rejectConstraint()
 		if(priorId==0)
 		{
 			this->updateGraphView();
-			updateLoopClosuresSlider();
 		}
 		else
 		{
@@ -9154,7 +9137,16 @@ std::multimap<int, rtabmap::Link> DatabaseViewer::updateLinksWithModifications(
 		findIter = rtabmap::graph::findLink(linksRefined_, iter->second.from(), iter->second.to());
 		if(findIter!=linksRefined_.end())
 		{
-			links.insert(*findIter); // add the refined link
+			// add the refined link
+			if(iter->second.from() == findIter->second.to() &&
+			   iter->second.from() != iter->second.to())
+			{
+				links.insert(std::make_pair(iter->second.from(), findIter->second.inverse()));
+			}
+			else 
+			{
+				links.insert(*findIter);
+			}
 			UDEBUG("Updated link (%d->%d, %d)", iter->second.from(), iter->second.to(), iter->second.type());
 			continue;
 		}
@@ -9171,15 +9163,81 @@ std::multimap<int, rtabmap::Link> DatabaseViewer::updateLinksWithModifications(
 		if(findIter!=linksRefined_.end())
 		{
 			links.insert(*findIter); // add the refined link
+			links.insert(std::make_pair(findIter->second.to(), findIter->second.inverse())); // return both ways 
 			UDEBUG("Added refined link (%d->%d, %d)", findIter->second.from(), findIter->second.to(), findIter->second.type());
 			continue;
 		}
 
 		UDEBUG("Added link (%d->%d, %d)", iter->second.from(), iter->second.to(), iter->second.type());
 		links.insert(*iter);
+		links.insert(std::make_pair(iter->second.to(), iter->second.inverse())); // return both ways 
 	}
 
 	return links;
+}
+
+void DatabaseViewer::updateNeighborsSlider(int from, int to)
+{
+	UDEBUG("%d %d", from, to);
+	neighborLinks_.clear();
+	std::multimap<int, Link> links = updateLinksWithModifications(links_);
+	int position = ui_->horizontalSlider_neighbors->value();
+	std::multimap<int, Link> linksSortedByChildren;
+	for(std::multimap<int, rtabmap::Link>::iterator iter = links.begin(); iter!=links.end(); ++iter)
+	{
+		if(iter->second.from() < iter->second.to())
+		{
+			linksSortedByChildren.insert(*iter);
+		}
+	}
+
+	for(std::multimap<int, rtabmap::Link>::iterator iter = linksSortedByChildren.begin(); iter!=linksSortedByChildren.end(); ++iter)
+	{
+		if(!iter->second.transform().isNull())
+		{
+			if(iter->second.type() == rtabmap::Link::kNeighbor ||
+			   iter->second.type() == rtabmap::Link::kNeighborMerged)
+			{
+				if((iter->second.from() == from && iter->second.to() == to) ||
+				   (iter->second.to() == from && iter->second.from() == to))
+				{
+					position = neighborLinks_.size();
+				}
+				neighborLinks_.append(iter->second);
+			}
+		}
+		else
+		{
+			UERROR("Transform null for link from %d to %d", iter->first, iter->second.to());
+		}
+	}
+
+	if(neighborLinks_.size())
+	{
+		if(neighborLinks_.size() == 1)
+		{
+			// just to be able to move the cursor of the neighbor slider
+			neighborLinks_.push_back(neighborLinks_.front());
+		}
+		ui_->horizontalSlider_neighbors->setMinimum(0);
+		ui_->horizontalSlider_neighbors->setMaximum(neighborLinks_.size()-1);
+		ui_->horizontalSlider_neighbors->setEnabled(true);
+		if(position != ui_->horizontalSlider_neighbors->value())
+		{
+			ui_->horizontalSlider_neighbors->setValue(position);
+		}
+		else
+		{
+			this->updateConstraintView(neighborLinks_.at(position));
+		}
+	}
+	else
+	{
+		ui_->horizontalSlider_neighbors->setEnabled(false);
+		constraintsViewer_->removeAllClouds();
+		constraintsViewer_->refreshView();
+		updateConstraintButtons();
+	}
 }
 
 void DatabaseViewer::updateLoopClosuresSlider(int from, int to)
@@ -9191,11 +9249,11 @@ void DatabaseViewer::updateLoopClosuresSlider(int from, int to)
 	std::multimap<int, Link> linksSortedByParents;
 	for(std::multimap<int, rtabmap::Link>::iterator iter = links.begin(); iter!=links.end(); ++iter)
 	{
-		if(iter->second.to() > iter->second.from())
+		if(iter->second.to() > iter->second.from() && iter->second.from() < 0) // landmark
 		{
 			linksSortedByParents.insert(std::make_pair(iter->second.to(), iter->second.inverse()));
 		}
-		else if(iter->second.to() != iter->second.from())
+		else if(iter->second.to() < iter->second.from())
 		{
 			linksSortedByParents.insert(*iter);
 		}

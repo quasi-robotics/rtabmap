@@ -539,6 +539,30 @@ IF(PDAL_FOUND)
 	ENDIF(PDAL_VERSION VERSION_LESS "1.7")
 ENDIF(PDAL_FOUND)
 
+IF(libLAS_FOUND)
+	SET(INCLUDE_DIRS
+		${INCLUDE_DIRS}
+		${libLAS_INCLUDE_DIRS}
+	)
+	SET(LIBRARIES
+		${LIBRARIES}
+		${libLAS_LIBRARIES}
+	)
+	SET(SRC_FILES
+		${SRC_FILES}
+		LASWriter.cpp
+	)
+ENDIF(libLAS_FOUND)
+
+
+IF(CudaSift_FOUND)
+	#target
+	SET(LIBRARIES
+		${LIBRARIES}
+		cudasift
+	)
+ENDIF(CudaSift_FOUND)
+
 
 IF(loam_velodyne_FOUND)
 	SET(INCLUDE_DIRS 
@@ -620,17 +644,17 @@ ENDIF(octomap_FOUND)
 
 IF(grid_map_core_FOUND)
     IF(TARGET grid_map_core)
-        SET(PUBLIC_LIBRARIES
-            ${PUBLIC_LIBRARIES}
+        SET(LIBRARIES
+            ${LIBRARIES}
             grid_map_core
         )
     ELSE()
-        SET(PUBLIC_INCLUDE_DIRS
-            ${PUBLIC_INCLUDE_DIRS}
+        SET(INCLUDE_DIRS
+            ${INCLUDE_DIRS}
             ${grid_map_core_INCLUDE_DIRS}
         )
-        SET(PUBLIC_LIBRARIES
-            ${PUBLIC_LIBRARIES}
+        SET(LIBRARIES
+            ${LIBRARIES}
             ${grid_map_core_LIBRARIES}
         )
     ENDIF()
