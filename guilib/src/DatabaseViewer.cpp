@@ -353,8 +353,8 @@ DatabaseViewer::DatabaseViewer(const QString & ini, QWidget * parent) :
 	connect(ui_->horizontalSlider_B, SIGNAL(sliderMoved(int)), this, SLOT(sliderBMoved(int)));
 	ui_->spinBox_indexA->setEnabled(false);
 	ui_->spinBox_indexB->setEnabled(false);
-	connect(ui_->spinBox_indexA, SIGNAL(valueChanged(int)), this, SLOT(sliderAValueChanged(int)));
-	connect(ui_->spinBox_indexB, SIGNAL(valueChanged(int)), this, SLOT(sliderBValueChanged(int)));
+	connect(ui_->spinBox_indexA, SIGNAL(valueChanged(int)), ui_->horizontalSlider_A, SLOT(setValue(int)));
+	connect(ui_->spinBox_indexB, SIGNAL(valueChanged(int)), ui_->horizontalSlider_B, SLOT(setValue(int)));
 
 	connect(ui_->toolButton_edit_priorA, SIGNAL(clicked(bool)), this, SLOT(editConstraint()));
 	connect(ui_->toolButton_edit_priorB, SIGNAL(clicked(bool)), this, SLOT(editConstraint()));
@@ -443,6 +443,7 @@ DatabaseViewer::DatabaseViewer(const QString & ini, QWidget * parent) :
 	connect(ui_->graphicsView_B, SIGNAL(configChanged()), this, SLOT(configModified()));
 	connect(ui_->comboBox_logger_level, SIGNAL(currentIndexChanged(int)), this, SLOT(configModified()));
 	connect(ui_->actionVertical_Layout, SIGNAL(toggled(bool)), this, SLOT(configModified()));
+	connect(ui_->actionConcise_Layout, SIGNAL(toggled(bool)), this, SLOT(configModified()));
 	connect(ui_->checkBox_alignPosesWithGPS, SIGNAL(stateChanged(int)), this, SLOT(updateGraphView()));
 	connect(ui_->checkBox_alignPosesWithGroundTruth, SIGNAL(stateChanged(int)), this, SLOT(updateGraphView()));
 	connect(ui_->checkBox_alignScansCloudsWithGroundTruth, SIGNAL(stateChanged(int)), this, SLOT(updateGraphView()));
@@ -543,6 +544,27 @@ void DatabaseViewer::showCloseButton(bool visible)
 
 void DatabaseViewer::configModified()
 {
+	if(ui_->actionConcise_Layout->isChecked())
+	{
+		ui_->graphicsView_B->setVisible(false);
+		ui_->scrollArea->setVisible(false);
+		ui_->scrollArea_2->setVisible(false);
+		ui_->spinBox_indexB->setVisible(false);
+		ui_->widget_imageControls_B->setVisible(false);
+		ui_->widget_graphControl->setVisible(false);
+		ui_->graphicsView_A->clearLines();
+		ui_->graphicsView_B->clearLines();
+	}
+	else
+	{
+		ui_->graphicsView_B->setVisible(true);
+		ui_->scrollArea->setVisible(true);
+		ui_->scrollArea_2->setVisible(true);
+		ui_->spinBox_indexB->setVisible(true);	
+		ui_->widget_imageControls_B->setVisible(true);
+		ui_->widget_graphControl->setVisible(true);
+	}
+	
 	this->setWindowModified(true);
 }
 
@@ -582,6 +604,7 @@ void DatabaseViewer::readSettings()
 
 	ui_->comboBox_logger_level->setCurrentIndex(settings.value("loggerLevel", ui_->comboBox_logger_level->currentIndex()).toInt());
 	ui_->actionVertical_Layout->setChecked(settings.value("verticalLayout", ui_->actionVertical_Layout->isChecked()).toBool());
+	ui_->actionConcise_Layout->setChecked(settings.value("conciseLayout", ui_->actionConcise_Layout->isChecked()).toBool());
 	ui_->checkBox_ignoreIntermediateNodes->setChecked(settings.value("ignoreIntermediateNodes", ui_->checkBox_ignoreIntermediateNodes->isChecked()).toBool());
 	ui_->checkBox_timeStats->setChecked(settings.value("timeStats", ui_->checkBox_timeStats->isChecked()).toBool());
 
@@ -672,6 +695,7 @@ void DatabaseViewer::writeSettings()
 
 	settings.setValue("loggerLevel", ui_->comboBox_logger_level->currentIndex());
 	settings.setValue("verticalLayout", ui_->actionVertical_Layout->isChecked());
+	settings.setValue("conciseLayout", ui_->actionConcise_Layout->isChecked());
 	settings.setValue("ignoreIntermediateNodes", ui_->checkBox_ignoreIntermediateNodes->isChecked());
 	settings.setValue("timeStats", ui_->checkBox_timeStats->isChecked());
 
@@ -4440,15 +4464,18 @@ void DatabaseViewer::refineLinks()
 	std::multimap<int, Link> allLinks = updateLinksWithModifications(links_);
 	for(std::multimap<int, Link>::iterator iter=allLinks.begin(); iter!=allLinks.end(); ++iter)
 	{
-		int minId = iter->second.from()>iter->second.to()?iter->second.to():iter->second.from();
-		int maxId = iter->second.from()<iter->second.to()?iter->second.to():iter->second.from();
-		if(minNodeId == 0 || minNodeId > minId)
+		if(iter->second.type() < Link::kPosePrior)
 		{
-			minNodeId = minId;
-		}
-		if(maxNodeId == 0 || maxNodeId < maxId)
-		{
-			maxNodeId = maxId;
+			int minId = iter->second.from()>iter->second.to()?iter->second.to():iter->second.from();
+			int maxId = iter->second.from()<iter->second.to()?iter->second.to():iter->second.from();
+			if(minNodeId == 0 || minNodeId > minId)
+			{
+				minNodeId = minId;
+			}
+			if(maxNodeId == 0 || maxNodeId < maxId)
+			{
+				maxNodeId = maxId;
+			}
 		}
 	}
 	if(minNodeId > 0)
@@ -4472,7 +4499,8 @@ void DatabaseViewer::refineLinks()
 			linkRefiningDialog_->getIntraInterSessions(intra, inter);
 			for(std::multimap<int, Link>::iterator iter=allLinks.begin(); iter!=allLinks.end(); ++iter)
 			{
-				if(type==Link::kEnd || type == iter->second.type())
+				if(iter->second.type() < Link::kPosePrior && 
+				   (type==Link::kEnd || type == iter->second.type()))
 				{
 					int from = iter->second.from();
 					int to = iter->second.to();
@@ -4501,6 +4529,10 @@ void DatabaseViewer::refineLinks()
 				refineLinks(links);
 			}
 		}
+	}
+	else
+	{
+		UWARN("No links can be refined!");
 	}
 }
 void DatabaseViewer::refineLinks(const QList<Link> & links)
@@ -4565,11 +4597,11 @@ void DatabaseViewer::graphNodeSelected(int id)
 	if(id>0 && idToIndex_.contains(id))
 	{
 		static bool updateA = true;
-		if(updateA)
+		if(updateA || ui_->actionConcise_Layout->isChecked())
 			ui_->horizontalSlider_A->setValue(idToIndex_.value(id));
 		else
 			ui_->horizontalSlider_B->setValue(idToIndex_.value(id));
-		updateA = !updateA;
+		updateA = !updateA || ui_->actionConcise_Layout->isChecked();
 	}
 }
 
@@ -5907,6 +5939,10 @@ void DatabaseViewer::updateStereo(const SensorData * data)
 
 void DatabaseViewer::updateWordsMatching(const std::vector<int> & inliers)
 {
+	if(ui_->actionConcise_Layout->isChecked()) {
+		return;
+	}
+
 	int from = ids_.at(ui_->horizontalSlider_A->value());
 	int to = ids_.at(ui_->horizontalSlider_B->value());
 	if(from && to)
@@ -7157,14 +7193,14 @@ void DatabaseViewer::sliderIterationsValueChanged(int value)
 						for(int y=0; y<map.rows; ++y)
 						{
 							// check for first
-							if(!firstSet && map.at<char>(y, x) != -1)
+							if(!firstSet && map.at<signed char>(y, x) != -1)
 							{
 								xFirst = x;
 								firstSet = true;
 							}
 							// check for last
 							int opp = map.cols-(x+1);
-							if(!lastSet && map.at<char>(y, opp) != -1)
+							if(!lastSet && map.at<signed char>(y, opp) != -1)
 							{
 								xLast = opp;
 								lastSet = true;
@@ -7178,14 +7214,14 @@ void DatabaseViewer::sliderIterationsValueChanged(int value)
 						for(int x=0; x<map.cols; ++x)
 						{
 							// check for first
-							if(!firstSet && map.at<char>(y, x) != -1)
+							if(!firstSet && map.at<signed char>(y, x) != -1)
 							{
 								yFirst = y;
 								firstSet = true;
 							}
 							// check for last
 							int opp = map.rows-(y+1);
-							if(!lastSet && map.at<char>(map.rows-(y+1), x) != -1)
+							if(!lastSet && map.at<signed char>(map.rows-(y+1), x) != -1)
 							{
 								yLast = opp;
 								lastSet = true;

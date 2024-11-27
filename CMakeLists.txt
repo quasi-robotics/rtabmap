@@ -61,7 +61,7 @@ IF(WIN32 AND NOT MINGW)
     ADD_DEFINITIONS("-DNOMINMAX")
     ADD_DEFINITIONS("-wd4100 -wd4127 -wd4150 -wd4191 -wd4242 -wd4244 -wd4251 -wd4305 -wd4365 -wd4512 -wd4514 -wd4548 -wd4571 -wd4619 -wd4625 -wd4626 -wd4628 -wd4668 -wd4710 -wd4711 -wd4738 -wd4820 -wd4946 -wd4986")
 ELSE ()
-    ADD_DEFINITIONS( "-Wall" )
+    ADD_DEFINITIONS( "-Wall -Wtype-limits" )
     ADD_DEFINITIONS("-Wno-unknown-pragmas")
 ENDIF()
 
@@ -797,9 +797,21 @@ ENDIF(WITH_VINS)
 
 IF(WITH_OPENVINS)
     FIND_PACKAGE(ov_msckf QUIET)
-    IF(ov_msckf_FOUND)
-       MESSAGE(STATUS "Found ov_msckf: ${ov_msckf_INCLUDE_DIRS}")
-    ENDIF(ov_msckf_FOUND)
+    # On ROS2, the indirect includes and libraries
+    # are not forwarded by ov_msckf target, append them manually
+    FIND_PACKAGE(ov_core QUIET)
+    FIND_PACKAGE(ov_init QUIET)
+    IF(ov_msckf_FOUND AND ov_core_FOUND AND ov_init_FOUND)
+      SET(ov_msckf_INCLUDE_DIRS
+         ${ov_msckf_INCLUDE_DIRS}
+         ${ov_core_INCLUDE_DIRS}
+         ${ov_init_INCLUDE_DIRS})
+      SET(ov_msckf_LIBRARIES
+         ${ov_msckf_LIBRARIES}
+         ${ov_core_LIBRARIES}
+         ${ov_init_LIBRARIES})
+      MESSAGE(STATUS "Found OpenVINS: ${ov_msckf_INCLUDE_DIRS}")
+    ENDIF()
 ENDIF(WITH_OPENVINS)
 
 IF(WITH_FASTCV)
