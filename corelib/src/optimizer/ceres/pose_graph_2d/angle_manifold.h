@@ -31,6 +31,13 @@
 #ifndef CERES_EXAMPLES_POSE_GRAPH_2D_ANGLE_MANIFOLD_H_
 #define CERES_EXAMPLES_POSE_GRAPH_2D_ANGLE_MANIFOLD_H_
 
+#if CERES_VERSION_MAJOR >= 3 || \
+    (CERES_VERSION_MAJOR == 2 && CERES_VERSION_MINOR >= 1)
+#include <ceres/autodiff_manifold.h>
+#include <ceres/manifold.h>
+#else
+#include <ceres/local_parameterization.h>
+#endif
 #include "normalize_angle.h"
 
 namespace ceres {
@@ -41,8 +48,6 @@ namespace examples {
 
 #if CERES_VERSION_MAJOR >= 3 || \
     (CERES_VERSION_MAJOR == 2 && CERES_VERSION_MINOR >= 1)
-#include "ceres/autodiff_manifold.h"
-#include "ceres/manifold.h"
 
 // Defines a manifold for updating the angle to be constrained in [-pi to pi).
 class AngleManifold {
@@ -71,7 +76,6 @@ class AngleManifold {
 };
 
 #else
-#include <ceres/local_parameterization.h>
 
 class AngleManifold {
  public:
