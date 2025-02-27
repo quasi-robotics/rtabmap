@@ -742,7 +742,7 @@ PreferencesDialog::PreferencesDialog(QWidget * parent) :
 	connect(_ui->source_spinBox_databaseStartId, SIGNAL(valueChanged(int)), this, SLOT(makeObsoleteSourcePanel()));
 	connect(_ui->source_spinBox_databaseStopId, SIGNAL(valueChanged(int)), this, SLOT(makeObsoleteSourcePanel()));
 	connect(_ui->source_checkBox_useDbStamps, SIGNAL(stateChanged(int)), this, SLOT(makeObsoleteSourcePanel()));
-	connect(_ui->source_spinBox_database_cameraIndex, SIGNAL(valueChanged(int)), this, SLOT(makeObsoleteSourcePanel()));
+	connect(_ui->source_lineEdit_databaseCameraIndex, SIGNAL(textChanged(const QString &)), this, SLOT(makeObsoleteSourcePanel()));
 	connect(_ui->source_checkBox_stereoToDepthDB, SIGNAL(toggled(bool)), _ui->checkbox_stereo_depthGenerated, SLOT(setChecked(bool)));
 	connect(_ui->checkbox_stereo_depthGenerated, SIGNAL(toggled(bool)), _ui->source_checkBox_stereoToDepthDB, SLOT(setChecked(bool)));
 
@@ -1410,6 +1410,8 @@ PreferencesDialog::PreferencesDialog(QWidget * parent) :
 	_ui->odom_f2m_validDepthRatio->setObjectName(Parameters::kOdomF2MValidDepthRatio().c_str());
 	_ui->odom_f2m_bundleStrategy->setObjectName(Parameters::kOdomF2MBundleAdjustment().c_str());
 	_ui->odom_f2m_bundleMaxFrames->setObjectName(Parameters::kOdomF2MBundleAdjustmentMaxFrames().c_str());
+	_ui->odom_f2m_bundleMinMotion->setObjectName(Parameters::kOdomF2MBundleAdjustmentMinMotion().c_str());
+	_ui->odom_f2m_bundleMaxKeyFramesPerFeature->setObjectName(Parameters::kOdomF2MBundleAdjustmentMaxKeyFramesPerFeature().c_str());
 
 	//Odometry Frame To Frame
 	_ui->comboBox_odomf2f_corType->setObjectName(Parameters::kVisCorType().c_str());
@@ -2134,7 +2136,7 @@ void PreferencesDialog::resetSettings(QGroupBox * groupBox)
 		_ui->source_checkBox_ignorePriors->setChecked(false);
 		_ui->source_spinBox_databaseStartId->setValue(0);
 		_ui->source_spinBox_databaseStopId->setValue(0);
-		_ui->source_spinBox_database_cameraIndex->setValue(-1);
+		_ui->source_lineEdit_databaseCameraIndex->setText("");
 		_ui->source_checkBox_useDbStamps->setChecked(true);
 
 #ifdef _WIN32
@@ -2865,7 +2867,7 @@ void PreferencesDialog::readCameraSettings(const QString & filePath)
 	_ui->source_checkBox_ignorePriors->setChecked(settings.value("ignorePriors", _ui->source_checkBox_ignorePriors->isChecked()).toBool());
 	_ui->source_spinBox_databaseStartId->setValue(settings.value("startId", _ui->source_spinBox_databaseStartId->value()).toInt());
 	_ui->source_spinBox_databaseStopId->setValue(settings.value("stopId", _ui->source_spinBox_databaseStopId->value()).toInt());
-	_ui->source_spinBox_database_cameraIndex->setValue(settings.value("cameraIndex", _ui->source_spinBox_database_cameraIndex->value()).toInt());
+	_ui->source_lineEdit_databaseCameraIndex->setText(settings.value("cameraIndices", _ui->source_lineEdit_databaseCameraIndex->text()).toString());
 	_ui->source_checkBox_useDbStamps->setChecked(settings.value("useDatabaseStamps", _ui->source_checkBox_useDbStamps->isChecked()).toBool());
 	settings.endGroup(); // Database
 
@@ -3465,7 +3467,7 @@ void PreferencesDialog::writeCameraSettings(const QString & filePath) const
 	settings.setValue("ignorePriors",  _ui->source_checkBox_ignorePriors->isChecked());
 	settings.setValue("startId",          _ui->source_spinBox_databaseStartId->value());
 	settings.setValue("stopId",          _ui->source_spinBox_databaseStopId->value());
-	settings.setValue("cameraIndex",       _ui->source_spinBox_database_cameraIndex->value());
+	settings.setValue("cameraIndices",       _ui->source_lineEdit_databaseCameraIndex->text());
 	settings.setValue("useDatabaseStamps", _ui->source_checkBox_useDbStamps->isChecked());
 	settings.endGroup(); // Database
 
@@ -4387,7 +4389,7 @@ void PreferencesDialog::selectSourceDatabase()
 		_ui->source_database_lineEdit_path->setText(paths.size()==1?paths.front():paths.join(";"));
 		_ui->source_spinBox_databaseStartId->setValue(0);
 		_ui->source_spinBox_databaseStopId->setValue(0);
-		_ui->source_spinBox_database_cameraIndex->setValue(-1);
+		_ui->source_lineEdit_databaseCameraIndex->setText("");
 	}
 }
 
@@ -4892,10 +4894,13 @@ void PreferencesDialog::setParameter(const std::string & key, const std::string 
 				{
 					if(valueInt==2 && combo->objectName().toStdString().compare(Parameters::kOptimizerStrategy()) == 0)
 					{
+					if(
 #ifndef RTABMAP_ORB_SLAM
-						if(Optimizer::isAvailable(Optimizer::kTypeG2O))
+						Optimizer::isAvailable(Optimizer::kTypeG2O)
+#else
+						true
 #endif
-						{
+						){
 							UWARN("Trying to set \"%s\" to GTSAM but RTAB-Map isn't built "
 								"with GTSAM. Falling back to g2o.",
 								combo->objectName().toStdString().c_str());
@@ -6948,13 +6953,50 @@ Camera * PreferencesDialog::createCamera(
 	}
 	else if(driver == kSrcDatabase)
 	{
+		std::vector<unsigned int> cameraIndices;
+		if(!_ui->source_lineEdit_databaseCameraIndex->text().isEmpty())
+		{
+			// read the first node to know how many cameras we have in the database
+			std::shared_ptr<DBReader> reader( 
+				new DBReader(
+					_ui->source_database_lineEdit_path->text().toStdString(),
+					0,
+					false,
+					false,
+					false,
+					_ui->source_spinBox_databaseStartId->value()));
+			if(reader->init())
+			{
+				SensorData data = reader->takeImage();
+				unsigned int numCamerasInDb = data.cameraModels().size()>0?data.cameraModels().size():data.stereoCameraModels().size();
+				if(numCamerasInDb>1)
+				{
+					QStringList indicesStr = _ui->source_lineEdit_databaseCameraIndex->text().split(' ');
+					for(QStringList::iterator iter=indicesStr.begin(); iter!=indicesStr.end(); ++iter)
+					{
+						cameraIndices.push_back(iter->toInt());
+						if(cameraIndices.back() > numCamerasInDb)
+						{
+							QMessageBox::warning(this,
+								tr("Creating Database Reader"),
+								tr("Camera index %1 is not valid, it should be between 0 and %2. Remove or update camera indices under Source->Database panel (currently set to \"%3\").")
+									.arg(cameraIndices.back()).arg(numCamerasInDb).arg(_ui->source_lineEdit_databaseCameraIndex->text()),
+								QMessageBox::Ok);
+							cameraIndices.clear();
+							return 0;
+						}
+					}
+				}
+			}
+		}
+		
 		camera = new DBReader(_ui->source_database_lineEdit_path->text().toStdString(),
 				_ui->source_checkBox_useDbStamps->isChecked()?-1:this->getGeneralInputRate(),
 				_ui->source_checkBox_ignoreOdometry->isChecked(),
 				_ui->source_checkBox_ignoreGoalDelay->isChecked(),
 				_ui->source_checkBox_ignoreGoals->isChecked(),
 				_ui->source_spinBox_databaseStartId->value(),
-				_ui->source_spinBox_database_cameraIndex->value(),
+				cameraIndices,
 				_ui->source_spinBox_databaseStopId->value(),
 				!_ui->general_checkBox_createIntermediateNodes->isChecked(),
 				_ui->source_checkBox_ignoreLandmarks->isChecked(),
