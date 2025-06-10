@@ -427,6 +427,10 @@ DatabaseViewer::DatabaseViewer(const QString & ini, QWidget * parent) :
 	connect(ui_->checkBox_showDisparityInsteadOfRight, SIGNAL(stateChanged(int)), this, SLOT(update3dView()));
 	connect(ui_->spinBox_decimation, SIGNAL(valueChanged(int)), this, SLOT(updateConstraintView()));
 	connect(ui_->spinBox_decimation, SIGNAL(valueChanged(int)), this, SLOT(update3dView()));
+	connect(ui_->spinBox_depthConfidence, SIGNAL(valueChanged(int)), this, SLOT(updateConstraintView()));
+	connect(ui_->spinBox_depthConfidence, SIGNAL(valueChanged(int)), this, SLOT(update3dView()));
+	connect(ui_->doubleSpinBox_depthEdgeBleedingError, SIGNAL(valueChanged(double)), this, SLOT(updateConstraintView()));
+	connect(ui_->doubleSpinBox_depthEdgeBleedingError, SIGNAL(valueChanged(double)), this, SLOT(update3dView()));
 	connect(ui_->groupBox_posefiltering, SIGNAL(clicked(bool)), this, SLOT(updateGraphView()));
 	connect(ui_->doubleSpinBox_posefilteringRadius, SIGNAL(editingFinished()), this, SLOT(updateGraphView()));
 	connect(ui_->doubleSpinBox_posefilteringAngle, SIGNAL(editingFinished()), this, SLOT(updateGraphView()));
@@ -457,6 +461,8 @@ DatabaseViewer::DatabaseViewer(const QString & ini, QWidget * parent) :
 	connect(ui_->checkBox_cameraProjection, SIGNAL(stateChanged(int)), this, SLOT(configModified()));
 	connect(ui_->checkBox_showDisparityInsteadOfRight, SIGNAL(stateChanged(int)), this, SLOT(configModified()));
 	connect(ui_->spinBox_decimation, SIGNAL(valueChanged(int)), this, SLOT(configModified()));
+	connect(ui_->spinBox_depthConfidence, SIGNAL(valueChanged(int)), this, SLOT(configModified()));
+	connect(ui_->doubleSpinBox_depthEdgeBleedingError, SIGNAL(valueChanged(double)), this, SLOT(configModified()));
 	connect(ui_->groupBox_posefiltering, SIGNAL(clicked(bool)), this, SLOT(configModified()));
 	connect(ui_->doubleSpinBox_posefilteringRadius, SIGNAL(valueChanged(double)), this, SLOT(configModified()));
 	connect(ui_->doubleSpinBox_posefilteringAngle, SIGNAL(valueChanged(double)), this, SLOT(configModified()));
@@ -616,6 +622,8 @@ void DatabaseViewer::readSettings()
 	ui_->doubleSpinBox_gainCompensationRadius->setValue(settings.value("gainCompensationRadius", ui_->doubleSpinBox_gainCompensationRadius->value()).toDouble());
 	ui_->doubleSpinBox_voxelSize->setValue(settings.value("voxelSize", ui_->doubleSpinBox_voxelSize->value()).toDouble());
 	ui_->spinBox_decimation->setValue(settings.value("decimation", ui_->spinBox_decimation->value()).toInt());
+	ui_->spinBox_depthConfidence->setValue(settings.value("depth_confidence_thr", ui_->spinBox_depthConfidence->value()).toInt());
+	ui_->doubleSpinBox_depthEdgeBleedingError->setValue(settings.value("depth_bleeding_error", ui_->doubleSpinBox_depthEdgeBleedingError->value()).toDouble());
 	ui_->checkBox_cameraProjection->setChecked(settings.value("camProj", ui_->checkBox_cameraProjection->isChecked()).toBool());
 	ui_->checkBox_showDisparityInsteadOfRight->setChecked(settings.value("showDisp", ui_->checkBox_showDisparityInsteadOfRight->isChecked()).toBool());
 	settings.endGroup();
@@ -707,6 +715,8 @@ void DatabaseViewer::writeSettings()
 	settings.setValue("gainCompensationRadius", ui_->doubleSpinBox_gainCompensationRadius->value());
 	settings.setValue("voxelSize", ui_->doubleSpinBox_voxelSize->value());
 	settings.setValue("decimation", ui_->spinBox_decimation->value());
+	settings.setValue("depth_confidence", ui_->spinBox_depthConfidence->value());
+	settings.setValue("depth_bleeding_error", ui_->doubleSpinBox_depthEdgeBleedingError->value());
 	settings.setValue("camProj", ui_->checkBox_cameraProjection->isChecked());
 	settings.setValue("showDisp", ui_->checkBox_showDisparityInsteadOfRight->isChecked());
 	settings.endGroup();
@@ -801,6 +811,8 @@ void DatabaseViewer::restoreDefaultSettings()
 	ui_->doubleSpinBox_gainCompensationRadius->setValue(0.0);
 	ui_->doubleSpinBox_voxelSize->setValue(0.0);
 	ui_->spinBox_decimation->setValue(1);
+	ui_->spinBox_depthConfidence->setValue(0);
+	ui_->doubleSpinBox_depthEdgeBleedingError->setValue(0.0);
 	ui_->checkBox_cameraProjection->setChecked(false);
 	ui_->checkBox_showDisparityInsteadOfRight->setChecked(false);
 
@@ -1584,6 +1596,11 @@ void DatabaseViewer::extractImages()
 						dir.mkdir(QString("%1/rgb").arg(path));
 						dir.mkdir(QString("%1/depth").arg(path));
 						dir.mkdir(QString("%1/calib").arg(path));
+						if(!data.depthConfidenceRaw().empty())
+						{
+							dir.mkdir(QString("%1/confidence").arg(path));
+							directoriesCreated = true;
+						}
 						directoriesCreated = true;
 					}
 				}
@@ -1668,7 +1685,14 @@ void DatabaseViewer::extractImages()
 							UWARN("Failed saving \"%s\"", QString("%1/rgb/%2.%3").arg(path).arg(id).arg(ext).toStdString().c_str());
 						if(!cv::imwrite(QString("%1/depth/%2.png").arg(path).arg(id).toStdString(), data.depthRaw().type()==CV_32FC1?util2d::cvtDepthFromFloat(data.depthRaw()):data.depthRaw()))
 							UWARN("Failed saving \"%s\"", QString("%1/depth/%2.png").arg(path).arg(id).toStdString().c_str());
-						UINFO(QString("Saved rgb/%1.%2 and depth/%1.png").arg(id).arg(ext).toStdString().c_str());
+						if(data.depthConfidenceRaw().empty()) {
+							UINFO(QString("Saved rgb/%1.%2 and depth/%1.png").arg(id).arg(ext).toStdString().c_str());
+						}
+						else {
+							if(!cv::imwrite(QString("%1/confidence/%2.png").arg(path).arg(id).toStdString(), data.depthConfidenceRaw()))
+								UWARN("Failed saving \"%s\"", QString("%1/confidence/%2.png").arg(path).arg(id).toStdString().c_str());
+							UINFO(QString("Saved rgb/%1.%2, depth/%1.png and confidence/%1.png").arg(id).arg(ext).toStdString().c_str());
+						}
 					}
 					else
 					{
@@ -4263,6 +4287,8 @@ void DatabaseViewer::detectMoreLoopClosures()
 		return;
 	}
 
+	std::shared_ptr<Registration> reg(Registration::create(ui_->parameters_toolbox->getParameters()));
+
 	for(int n=0; n<iterations; ++n)
 	{
 		UINFO("iteration %d/%d", n+1, iterations);
@@ -4310,7 +4336,7 @@ void DatabaseViewer::detectMoreLoopClosures()
 						   delta.getNorm() >= ui_->doubleSpinBox_detectMore_radiusMin->value())
 						{
 							checkedLoopClosures.insert(std::make_pair(from, to));
-							if(addConstraint(from, to, true, useOptimizedGraphAsGuess))
+							if(addConstraint(from, to, reg.get(), true, useOptimizedGraphAsGuess))
 							{
 								UINFO("Added new loop closure between %d and %d.", from, to);
 								++added;
@@ -4568,13 +4594,16 @@ void DatabaseViewer::refineLinks(const QList<Link> & links)
 		progressDialog->setMinimumWidth(800);
 		progressDialog->show();
 
+		RegistrationIcp regProximity(ui_->parameters_toolbox->getParameters());
+		std::shared_ptr<Registration> reg(Registration::create(ui_->parameters_toolbox->getParameters()));
+
 		for(int i=0; i<links.size(); ++i)
 		{
 			int from = links[i].from();
 			int to = links[i].to();
 			if(from > 0 && to > 0)
 			{
-				this->refineConstraint(links[i].from(), links[i].to(), true);
+				this->refineConstraint(links[i].from(), links[i].to(), reg.get(), &regProximity, true);
 				progressDialog->appendText(tr("Refined link %1->%2 (%3/%4)").arg(from).arg(to).arg(i+1).arg(links.size()));
 			}
 			else
@@ -4802,7 +4831,7 @@ void DatabaseViewer::update(int value,
 
 				if(!imgDepth.empty())
 				{
-					view->setImageDepth(imgDepth);
+					view->setImageDepth(imgDepth, data.depthConfidenceRaw());
 					if(img.isNull())
 					{
 						rect.setWidth(imgDepth.cols);
@@ -5261,6 +5290,12 @@ void DatabaseViewer::update(int value,
 					{
 						if(!data.depthOrRightRaw().empty())
 						{
+							if(!data.depthRaw().empty() && ui_->doubleSpinBox_depthEdgeBleedingError->value() > 0.0) {
+								cv::Mat depth = data.depthRaw();
+								util2d::depthBleedingFiltering(depth, ui_->doubleSpinBox_depthEdgeBleedingError->value());
+								data.setRGBDImage(data.imageRaw(), depth, data.depthConfidenceRaw(), data.cameraModels());
+							}
+
 							if(!data.imageRaw().empty())
 							{
 								std::vector<pcl::PointCloud<pcl::PointXYZRGB>::Ptr> clouds;
@@ -5276,8 +5311,13 @@ void DatabaseViewer::update(int value,
 									pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud = util3d::cloudFromDepthRGB(
 											data.imageRaw(),
 											depth,
+											data.depthConfidenceRaw(),
 											data.cameraModels()[0],
-											ui_->spinBox_decimation->value(),0,0,indices.get());
+											ui_->spinBox_decimation->value(),
+											0,
+											0,
+											(unsigned char)ui_->spinBox_depthConfidence->value(),
+											indices.get());
 									if(indices->size())
 									{
 										clouds.push_back(util3d::transformPointCloud(cloud, data.cameraModels()[0].localTransform()));
@@ -5286,7 +5326,14 @@ void DatabaseViewer::update(int value,
 								}
 								else
 								{
-									clouds = util3d::cloudsRGBFromSensorData(data, ui_->spinBox_decimation->value(), 0, 0, &allIndices, ui_->parameters_toolbox->getParameters());
+									clouds = util3d::cloudsRGBFromSensorData(
+										data, 
+										ui_->spinBox_decimation->value(), 
+										0, 
+										0, 
+										&allIndices, 
+										ui_->parameters_toolbox->getParameters(),std::vector<float>(), 
+										(unsigned char)ui_->spinBox_depthConfidence->value());
 								}
 								UASSERT(clouds.size() == allIndices.size());
 								for(size_t i=0; i<allIndices.size(); ++i)
@@ -5361,7 +5408,14 @@ void DatabaseViewer::update(int value,
 								std::vector<pcl::PointCloud<pcl::PointXYZ>::Ptr> clouds;
 								std::vector<pcl::IndicesPtr> allIndices;
 
-								clouds = util3d::cloudsFromSensorData(data, ui_->spinBox_decimation->value(), 0, 0, &allIndices, ui_->parameters_toolbox->getParameters());
+								clouds = util3d::cloudsFromSensorData(
+									data, 
+									ui_->spinBox_decimation->value(), 
+									0, 
+									0, 
+									&allIndices, ui_->parameters_toolbox->getParameters(),
+									std::vector<float>(),
+									(unsigned char)ui_->spinBox_depthConfidence->value());
 								UASSERT(clouds.size() == allIndices.size());
 								for(size_t i=0; i<allIndices.size(); ++i)
 								{
@@ -6353,11 +6407,12 @@ void DatabaseViewer::updateConstraintView(
 			ui_->checkBox_showOptimized->setEnabled(true);
 			Transform topt = iterFrom->second.inverse()*iterTo->second;
 			float diff = topt.getDistance(t);
+
 			Transform v1 = t.rotation()*Transform(1,0,0,0,0,0);
 			Transform v2 = topt.rotation()*Transform(1,0,0,0,0,0);
 			float a = pcl::getAngle3D(Eigen::Vector4f(v1.x(), v1.y(), v1.z(), 0), Eigen::Vector4f(v2.x(), v2.y(), v2.z(), 0));
 			a = (a *180.0f) / CV_PI;
-			ui_->label_constraint_opt->setText(QString("%1\n(error=%2% a=%3)").arg(QString(topt.prettyPrint().c_str()).replace(" ", "\n")).arg((t.getNorm()>0?diff/t.getNorm():0)*100.0f).arg(a));
+			ui_->label_constraint_opt->setText(QString("%1\n(error=%2% a=%3 deg)").arg(QString(topt.prettyPrint().c_str()).replace(" ", "\n")).arg((t.getNorm()>0?diff/t.getNorm():0)*100.0f).arg(a));
 
 			if(ui_->checkBox_showOptimized->isChecked())
 			{
@@ -6488,11 +6543,37 @@ void DatabaseViewer::updateConstraintView(
 			pcl::IndicesPtr indicesTo(new std::vector<int>);
 			if(!dataFrom.imageRaw().empty() && !dataFrom.depthOrRightRaw().empty())
 			{
-				cloudFrom=util3d::cloudRGBFromSensorData(dataFrom, ui_->spinBox_decimation->value(), 0, 0, indicesFrom.get(), ui_->parameters_toolbox->getParameters());
+				if(!dataFrom.depthRaw().empty() && ui_->doubleSpinBox_depthEdgeBleedingError->value() > 0.0) {
+					cv::Mat depth = dataFrom.depthRaw();
+					util2d::depthBleedingFiltering(depth, ui_->doubleSpinBox_depthEdgeBleedingError->value());
+					dataFrom.setRGBDImage(dataFrom.imageRaw(), depth, dataFrom.depthConfidenceRaw(), dataFrom.cameraModels());
+				}
+				cloudFrom=util3d::cloudRGBFromSensorData(
+					dataFrom, 
+					ui_->spinBox_decimation->value(),
+					0, 
+					0, 
+					indicesFrom.get(), 
+					ui_->parameters_toolbox->getParameters(),
+					std::vector<float>(),
+					(unsigned char)ui_->spinBox_depthConfidence->value());
 			}
 			if(!dataTo.imageRaw().empty() && !dataTo.depthOrRightRaw().empty())
 			{
-				cloudTo=util3d::cloudRGBFromSensorData(dataTo, ui_->spinBox_decimation->value(), 0, 0, indicesTo.get(), ui_->parameters_toolbox->getParameters());
+				if(!dataTo.depthRaw().empty() && ui_->doubleSpinBox_depthEdgeBleedingError->value() > 0.0) {
+					cv::Mat depth = dataTo.depthRaw();
+					util2d::depthBleedingFiltering(depth, ui_->doubleSpinBox_depthEdgeBleedingError->value());
+					dataTo.setRGBDImage(dataTo.imageRaw(), depth, dataTo.depthConfidenceRaw(), dataTo.cameraModels());
+				}
+				cloudTo=util3d::cloudRGBFromSensorData(
+					dataTo, 
+					ui_->spinBox_decimation->value(), 
+					0, 
+					0, 
+					indicesTo.get(), 
+					ui_->parameters_toolbox->getParameters(),
+					std::vector<float>(),
+					(unsigned char)ui_->spinBox_depthConfidence->value());
 			}
 
 			if(cloudTo.get() && indicesTo->size())
@@ -7140,7 +7221,7 @@ void DatabaseViewer::sliderIterationsValueChanged(int value)
 			}
 			if(!allNodesAreInWM)
 			{
-				ui_->graphViewer->updatePosterior(colors, 1, 1);
+				ui_->graphViewer->updateNodeColorByValue("In WM", colors, 1, false, 1);
 			}
 		}
 		QGraphicsRectItem * rectScaleItem = 0;
@@ -8085,10 +8166,12 @@ void DatabaseViewer::refineConstraint()
 {
 	int from = ids_.at(ui_->horizontalSlider_A->value());
 	int to = ids_.at(ui_->horizontalSlider_B->value());
-	refineConstraint(from, to, false);
+	RegistrationIcp regProximity(ui_->parameters_toolbox->getParameters());
+	std::shared_ptr<Registration> reg(Registration::create(ui_->parameters_toolbox->getParameters()));
+	refineConstraint(from, to, reg.get(), &regProximity, false);
 }
 
-void DatabaseViewer::refineConstraint(int from, int to, bool silent)
+void DatabaseViewer::refineConstraint(int from, int to, Registration * reg, RegistrationIcp * regProximity, bool silent)
 {
 	UDEBUG("%d -> %d", from, to);
 	bool switchedIds = false;
@@ -8361,8 +8444,7 @@ void DatabaseViewer::refineConstraint(int from, int to, bool silent)
 				fromScan.is2d()?Transform(0,0,fromScan.localTransform().z(),0,0,0):Transform::getIdentity()));
 
 		toS = new Signature(assembledData);
-		RegistrationIcp registrationIcp(parameters);
-		transform = registrationIcp.computeTransformationMod(*fromS, *toS, currentLink.transform(), &info);
+		transform = regProximity->computeTransformationMod(*fromS, *toS, currentLink.transform(), &info);
 		if(!transform.isNull())
 		{
 			// local scan matching proximity detection should have higher variance (see Rtabmap::process())
@@ -8380,7 +8462,6 @@ void DatabaseViewer::refineConstraint(int from, int to, bool silent)
 		}
 
 		bool reextractVisualFeatures = uStr2Bool(parameters.at(Parameters::kRGBDLoopClosureReextractFeatures()));
-		Registration * reg = Registration::create(parameters);
 		if( reg->isScanRequired() ||
 			reg->isUserDataRequired() ||
 			reextractVisualFeatures ||
@@ -8477,8 +8558,6 @@ void DatabaseViewer::refineConstraint(int from, int to, bool silent)
 			transform = reg->computeTransformationMod(*toS, *fromS, t.isNull()?t:t.inverse(), &info);
 			switchedIds = true;
 		}
-
-		delete reg;
 	}
 	UINFO("(%d ->%d) Registration time: %f s", currentLink.from(), currentLink.to(), timer.ticks());
 
@@ -8610,11 +8689,14 @@ void DatabaseViewer::addConstraint()
 {
 	int from = ids_.at(ui_->horizontalSlider_A->value());
 	int to = ids_.at(ui_->horizontalSlider_B->value());
-	addConstraint(from, to, false);
+	std::shared_ptr<Registration> reg(Registration::create(ui_->parameters_toolbox->getParameters()));
+	addConstraint(from, to, reg.get(), false);
 }
 
-bool DatabaseViewer::addConstraint(int from, int to, bool silent, bool silentlyUseOptimizedGraphAsGuess)
+bool DatabaseViewer::addConstraint(int from, int to, Registration * reg, bool silent, bool silentlyUseOptimizedGraphAsGuess)
 {
+	UASSERT(reg);
+
 	bool switchedIds = false;
 	if(from == to)
 	{
@@ -8641,7 +8723,6 @@ bool DatabaseViewer::addConstraint(int from, int to, bool silent, bool silentlyU
 		UASSERT(!containsLink(linksRefined_, from, to));
 
 		ParametersMap parameters = ui_->parameters_toolbox->getParameters();
-		Registration * reg = Registration::create(parameters);
 
 		bool loopCovLimited = Parameters::defaultRGBDLoopCovLimited();
 		Parameters::parse(parameters, Parameters::kRGBDLoopCovLimited(), loopCovLimited);
@@ -8823,7 +8904,6 @@ bool DatabaseViewer::addConstraint(int from, int to, bool silent, bool silentlyU
 		{
 			t = reg->computeTransformationMod(*fromS, *toS, guess, &info);
 		}
-		delete reg;
 		UDEBUG("");
 
 		if(!t.isNull())

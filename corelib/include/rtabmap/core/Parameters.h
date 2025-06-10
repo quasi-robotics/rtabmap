@@ -390,6 +390,7 @@ class RTABMAP_CORE_EXPORT Parameters
     RTABMAP_PARAM(RGBD, MaxOdomCacheSize,             int,  10,      uFormat("Maximum odometry cache size. Used only in localization mode (when %s=false). This is used to get smoother localizations and to verify localization transforms (when %s!=0) to make sure we don't teleport to a location very similar to one we previously localized on. Set 0 to disable caching.", kMemIncrementalMemory().c_str(), kRGBDOptimizeMaxError().c_str()));
     RTABMAP_PARAM(RGBD, LocalizationSmoothing,        bool, true,    uFormat("Adjust localization constraints based on optimized odometry cache poses (when %s>0).",  kRGBDMaxOdomCacheSize().c_str()));
     RTABMAP_PARAM(RGBD, LocalizationPriorError,       double, 0.001, uFormat("The corresponding variance (error x error) set to priors of the map's poses during localization (when %s>0).",  kRGBDMaxOdomCacheSize().c_str()));
+    RTABMAP_PARAM(RGBD, LocalizationSecondTryWithoutProximityLinks,  bool, true, uFormat("When localization is rejected by graph optimization validation, try a second time without proximity links if landmark or loop closure links are also present in odometry cache (see %s). If it succeeds, the proximity links are removed. This assumes that global loop closure and landmark links are more accurate than proximity links.", kRGBDMaxOdomCacheSize().c_str()));
 
     // Local/Proximity loop closure detection
     RTABMAP_PARAM(RGBD, ProximityByTime,              bool, false, "Detection over all locations in STM.");
@@ -678,7 +679,6 @@ class RTABMAP_CORE_EXPORT Parameters
 
     // Visual registration parameters
     RTABMAP_PARAM(Vis, EstimationType,           int,    1,     "Motion estimation approach: 0:3D->3D, 1:3D->2D (PnP), 2:2D->2D (Epipolar Geometry)");
-    RTABMAP_PARAM(Vis, ForwardEstOnly,           bool,   true,  "Forward estimation only (A->B). If false, a transformation is also computed in backward direction (B->A), then the two resulting transforms are merged (middle interpolation between the transforms).");
     RTABMAP_PARAM(Vis, InlierDistance,           float,  0.1,   uFormat("[%s = 0] Maximum distance for feature correspondences. Used by 3D->3D estimation approach.", kVisEstimationType().c_str()));
     RTABMAP_PARAM(Vis, RefineIterations,         int,    5,     uFormat("[%s = 0] Number of iterations used to refine the transformation found by RANSAC. 0 means that the transformation is not refined.", kVisEstimationType().c_str()));
     RTABMAP_PARAM(Vis, PnPReprojError,           float,  2,     uFormat("[%s = 1] PnP reprojection error.", kVisEstimationType().c_str()));

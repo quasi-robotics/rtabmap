@@ -55,7 +55,8 @@ DBReader::DBReader(const std::string & databasePath,
 				   bool featuresIgnored,
 				   int startMapId,
 				   int stopMapId,
-				   bool priorsIgnored) :
+				   bool priorsIgnored,
+				   const std::vector<Transform> & cameraLocalTransformOverrides) :
 	Camera(frameRate),
 	_paths(uSplit(databasePath, ';')),
 	_odometryIgnored(odometryIgnored),
@@ -70,6 +71,7 @@ DBReader::DBReader(const std::string & databasePath,
 	_priorsIgnored(priorsIgnored),
 	_startMapId(startMapId),
 	_stopMapId(stopMapId),
+	_cameraLocalTransformOverrides(cameraLocalTransformOverrides),
 	_dbDriver(0),
 	_currentId(_ids.end()),
 	_previousMapId(-1),
@@ -77,15 +79,7 @@ DBReader::DBReader(const std::string & databasePath,
 	_previousMapID(0),
 	_calibrated(false)
 {
-	if(_stopId>0 && _stopId<_startId)
-	{
-		_stopId = _startId;
-	}
-
-	if(_stopMapId>-1 && _stopMapId<_startMapId)
-	{
-		_stopMapId = _startMapId;
-	}
+	checkArguments();
 }
 
 DBReader::DBReader(const std::list<std::string> & databasePaths,
@@ -101,7 +95,8 @@ DBReader::DBReader(const std::list<std::string> & databasePaths,
 				   bool featuresIgnored,
 				   int startMapId,
 				   int stopMapId,
-				   bool priorsIgnored) :
+				   bool priorsIgnored,
+				   const std::vector<Transform> & cameraLocalTransformOverrides) :
 	Camera(frameRate),
    _paths(databasePaths),
 	_odometryIgnored(odometryIgnored),
@@ -116,12 +111,18 @@ DBReader::DBReader(const std::list<std::string> & databasePaths,
 	_priorsIgnored(priorsIgnored),
 	_startMapId(startMapId),
 	_stopMapId(stopMapId),
+	_cameraLocalTransformOverrides(cameraLocalTransformOverrides),
 	_dbDriver(0),
 	_currentId(_ids.end()),
 	_previousMapId(-1),
 	_previousStamp(0),
 	_previousMapID(0),
 	_calibrated(false)
+{
+	checkArguments();
+}
+
+void DBReader::checkArguments()
 {
 	if(_stopId>0 && _stopId<_startId)
 	{
@@ -131,6 +132,28 @@ DBReader::DBReader(const std::list<std::string> & databasePaths,
 	if(_stopMapId>-1 && _stopMapId<_startMapId)
 	{
 		_stopMapId = _startMapId;
+	}
+
+	if(!_cameraLocalTransformOverrides.empty())
+	{
+		if(!_cameraIndices.empty() &&
+			_cameraIndices.size() != _cameraLocalTransformOverrides.size())
+		{
+			UERROR("Camera local transform overrides (%d) are not the same size than the camera indices (%d). The overrides are ignored.",
+				_cameraLocalTransformOverrides.size(),
+				_cameraIndices.size()
+			);
+			_cameraLocalTransformOverrides.clear();
+		}
+		for(size_t i=0; i<_cameraLocalTransformOverrides.size(); ++i)
+		{
+			if(_cameraLocalTransformOverrides[i].isNull())
+			{
+				UERROR("Camera local transform overrides vector cannot contains null transforms! Clearing overrides.");
+				_cameraLocalTransformOverrides.clear();
+				break;
+			}
+		}
 	}
 }
 
@@ -144,8 +167,8 @@ DBReader::~DBReader()
 }
 
 bool DBReader::init(
-		const std::string & calibrationFolder,
-		const std::string & cameraName)
+		const std::string &,
+		const std::string &)
 {
 	if(_dbDriver)
 	{
@@ -566,11 +589,25 @@ SensorData DBReader::getNextData(SensorCaptureInfo * info)
 					dbModels.push_back(data.stereoCameraModels()[i].left());
 				}
 			}
-			if(dbModels.size() > 1 &&
-				!_cameraIndices.empty())
+
+			if(!_cameraLocalTransformOverrides.empty() && 
+				!_cameraIndices.empty() &&
+				_cameraIndices.size() != _cameraLocalTransformOverrides.size())
 			{
+				UERROR("Camera local transform overrides (%d) are not the same size than the camera indices (%d). The overrides are ignored.",
+					_cameraLocalTransformOverrides.size(),
+					_cameraIndices.size()
+				);
+				_cameraLocalTransformOverrides.clear();
+			}
+
+			std::vector<Transform> combinedLocalTransforms;
+			if(dbModels.size() > 1 && !_cameraIndices.empty())
+			{
+				// update images and local transforms
 				cv::Mat combinedImages;
 				cv::Mat combinedDepthImages;
+				cv::Mat combinedDepthConfidenceImages;
 				std::vector<CameraModel> combinedModels;
 				std::vector<StereoCameraModel> combinedStereoModels;
 				for(size_t i=0; i<_cameraIndices.size(); ++i)
@@ -609,25 +646,81 @@ SensorData DBReader::getNextData(SensorCaptureInfo * info)
 						fromROI = cv::Mat(data.depthOrRightRaw(), cv::Rect(_cameraIndices[i]*subImageWidth, 0, subImageWidth, data.depthOrRightRaw().rows));
 						toROI = cv::Mat(combinedDepthImages, cv::Rect(addedCameras*subImageWidth, 0, subImageWidth, combinedDepthImages.rows));
 						fromROI.copyTo(toROI);
+
+						if(!data.depthConfidenceRaw().empty())
+						{
+							UASSERT(data.depthConfidenceRaw().size() == data.depthOrRightRaw().size());
+							if(combinedDepthConfidenceImages.empty())
+							{
+								combinedDepthConfidenceImages = cv::Mat(data.depthConfidenceRaw().rows, subImageWidth*(_cameraIndices.size()-i), data.depthConfidenceRaw().type());
+							}
+							fromROI = cv::Mat(data.depthConfidenceRaw(), cv::Rect(_cameraIndices[i]*subImageWidth, 0, subImageWidth, data.depthConfidenceRaw().rows));
+							toROI = cv::Mat(combinedDepthConfidenceImages, cv::Rect(addedCameras*subImageWidth, 0, subImageWidth, combinedDepthConfidenceImages.rows));
+							fromROI.copyTo(toROI);
+						}
 					}
 
 					if(!data.cameraModels().empty())
 					{
-						combinedModels.push_back(data.cameraModels()[_cameraIndices[i]]);
+						CameraModel model = data.cameraModels()[_cameraIndices[i]];
+						if(!_cameraLocalTransformOverrides.empty())
+						{
+							model.setLocalTransform(_cameraLocalTransformOverrides[i] * CameraModel::opticalRotation());
+						}
+						combinedModels.push_back(model);
+						combinedLocalTransforms.push_back(model.localTransform());
 					}
 					else
 					{
-						combinedStereoModels.push_back(data.stereoCameraModels()[_cameraIndices[i]]);
+						StereoCameraModel stereoModel = data.stereoCameraModels()[_cameraIndices[i]];
+						if(!_cameraLocalTransformOverrides.empty())
+						{
+							stereoModel.setLocalTransform(_cameraLocalTransformOverrides[i] * CameraModel::opticalRotation());
+						}
+						combinedStereoModels.push_back(stereoModel);
+						combinedLocalTransforms.push_back(stereoModel.localTransform());
 					}
 					cameraOldNewIndices.insert(std::make_pair(_cameraIndices[i], i));
 				}
 				if(!combinedModels.empty())
 				{
-					data.setRGBDImage(combinedImages, combinedDepthImages, combinedModels);
+					data.setRGBDImage(combinedImages, combinedDepthImages, combinedDepthConfidenceImages, combinedModels);
 				}
 				else
 				{
 					data.setStereoImage(combinedImages, combinedDepthImages, combinedStereoModels);
+				}
+			}
+			else if(!_cameraLocalTransformOverrides.empty() &&
+					_cameraLocalTransformOverrides.size() == dbModels.size())
+			{
+				// just update local transforms
+				std::vector<CameraModel> combinedModels;
+				std::vector<StereoCameraModel> combinedStereoModels;
+				for(size_t i=0; i<dbModels.size(); ++i)
+				{
+					if(!data.cameraModels().empty())
+					{
+						CameraModel model = data.cameraModels()[i];
+						model.setLocalTransform(_cameraLocalTransformOverrides[i] * CameraModel::opticalRotation());
+						combinedModels.push_back(model);
+						combinedLocalTransforms.push_back(model.localTransform());
+					}
+					else
+					{
+						StereoCameraModel stereoModel = data.stereoCameraModels()[i];
+						stereoModel.setLocalTransform(_cameraLocalTransformOverrides[i] * CameraModel::opticalRotation());
+						combinedStereoModels.push_back(stereoModel);
+						combinedLocalTransforms.push_back(stereoModel.localTransform());
+					}
+				}
+				if(!combinedModels.empty())
+				{
+					data.setCameraModels(combinedModels);
+				}
+				else
+				{
+					data.setStereoCameraModels(combinedStereoModels);
 				}
 			}
 			data.setId(seq);
@@ -648,10 +741,11 @@ SensorData DBReader::getNextData(SensorCaptureInfo * info)
 			}
 			data.setLandmarks(landmarks);
 
-			UDEBUG("Laser=%d RGB/Left=%d Depth/Right=%d, Grid=%d, UserData=%d, GlobalPose=%d, GPS=%d, IMU=%d",
+			UDEBUG("Laser=%d RGB/Left=%d Depth/Right=%d, Conf=%d, Grid=%d, UserData=%d, GlobalPose=%d, GPS=%d, IMU=%d",
 					data.laserScanRaw().isEmpty()?0:1,
 					data.imageRaw().empty()?0:1,
 					data.depthOrRightRaw().empty()?0:1,
+					data.depthConfidenceRaw().empty()?0:1,
 					data.gridCellSize()==0.0f?0:1,
 					data.userDataRaw().empty()?0:1,
 					globalPose.isNull()?0:1,
@@ -686,7 +780,9 @@ SensorData DBReader::getNextData(SensorCaptureInfo * info)
 							newKeypoints.back().pt.x += (newCameraIndex-cameraIndex)*subImageWidth;
 							if(!keypoints3D.empty())
 							{
-								newKeypoints3D.push_back(keypoints3D.at(i));
+								cv::Point3f pt = util3d::transformPoint(keypoints3D.at(i), dbModels[cameraIndex].localTransform().inverse());
+								pt = util3d::transformPoint(pt, combinedLocalTransforms[cameraIndex]);
+								newKeypoints3D.push_back(pt);
 							}
 							if(!descriptors.empty())
 							{
@@ -695,6 +791,25 @@ SensorData DBReader::getNextData(SensorCaptureInfo * info)
 						}
 					}
 					data.setFeatures(newKeypoints, newKeypoints3D, newDescriptors);
+				}
+				else if(!combinedLocalTransforms.empty())
+				{
+					// We are overriding the camera local transforms, let's move 3D words accordingly
+					UASSERT(dbModels.size() == combinedLocalTransforms.size());
+					std::vector<cv::Point3f> newKeypoints3D;
+					UASSERT(dbModels[0].imageWidth()>0);
+					int subImageWidth = dbModels[0].imageWidth();
+					for(size_t i = 0; i<keypoints3D.size(); ++i)
+					{
+						int cameraIndex = int(keypoints.at(i).pt.x / subImageWidth);
+						UASSERT_MSG(cameraIndex >= 0 && cameraIndex < (int)dbModels.size(),
+								uFormat("cameraIndex=%d, db models=%d, kpt.x=%f, image width=%d",
+										cameraIndex, (int)dbModels.size(), keypoints[i].pt.x, subImageWidth).c_str());
+						cv::Point3f pt = util3d::transformPoint(keypoints3D.at(i), dbModels[cameraIndex].localTransform().inverse());
+						pt = util3d::transformPoint(pt, combinedLocalTransforms[cameraIndex]);
+						newKeypoints3D.push_back(pt);
+					}
+					data.setFeatures(keypoints, newKeypoints3D, descriptors);
 				}
 				else
 				{

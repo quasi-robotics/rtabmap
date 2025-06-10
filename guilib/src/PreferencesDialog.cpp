@@ -551,6 +551,10 @@ PreferencesDialog::PreferencesDialog(QWidget * parent) :
 	_3dRenderingRoiRatios[0] = _ui->lineEdit_roiRatios;
 	_3dRenderingRoiRatios[1] = _ui->lineEdit_roiRatios_odom;
 
+	_3dRenderingDepthConfidenceThr.resize(2);
+	_3dRenderingDepthConfidenceThr[0] = _ui->spinBox_depthConf;
+	_3dRenderingDepthConfidenceThr[1] = _ui->spinBox_depthConf_odom;
+
 	_3dRenderingColorScheme.resize(2);
 	_3dRenderingColorScheme[0] = _ui->spinBox_colorScheme;
 	_3dRenderingColorScheme[1] = _ui->spinBox_colorScheme_odom;
@@ -622,6 +626,7 @@ PreferencesDialog::PreferencesDialog(QWidget * parent) :
 		connect(_3dRenderingMaxDepth[i], SIGNAL(valueChanged(double)), this, SLOT(makeObsoleteCloudRenderingPanel()));
 		connect(_3dRenderingMinDepth[i], SIGNAL(valueChanged(double)), this, SLOT(makeObsoleteCloudRenderingPanel()));
 		connect(_3dRenderingRoiRatios[i], SIGNAL(textChanged(const QString &)), this, SLOT(makeObsoleteCloudRenderingPanel()));
+		connect(_3dRenderingDepthConfidenceThr[i], SIGNAL(valueChanged(int)), this, SLOT(makeObsoleteCloudRenderingPanel()));
 		connect(_3dRenderingShowScans[i], SIGNAL(stateChanged(int)), this, SLOT(makeObsoleteCloudRenderingPanel()));
 		connect(_3dRenderingShowFeatures[i], SIGNAL(stateChanged(int)), this, SLOT(makeObsoleteCloudRenderingPanel()));
 		connect(_3dRenderingShowFrustums[i], SIGNAL(stateChanged(int)), this, SLOT(makeObsoleteCloudRenderingPanel()));
@@ -1256,6 +1261,7 @@ PreferencesDialog::PreferencesDialog(QWidget * parent) :
 	_ui->spinBox_maxOdomCacheSize->setObjectName(Parameters::kRGBDMaxOdomCacheSize().c_str());
 	_ui->checkbox_localizationSmoothing->setObjectName(Parameters::kRGBDLocalizationSmoothing().c_str());
 	_ui->doubleSpinBox_localizationPriorError->setObjectName(Parameters::kRGBDLocalizationPriorError().c_str());
+	_ui->checkbox_localizationSecondTryWithoutProximityLinks->setObjectName(Parameters::kRGBDLocalizationSecondTryWithoutProximityLinks().c_str());
 
 	// Registration
 	_ui->reg_repeatOnce->setObjectName(Parameters::kRegRepeatOnce().c_str());
@@ -1272,7 +1278,6 @@ PreferencesDialog::PreferencesDialog(QWidget * parent) :
 	_ui->loopClosure_estimationType->setObjectName(Parameters::kVisEstimationType().c_str());
 	connect(_ui->loopClosure_estimationType, SIGNAL(currentIndexChanged(int)), _ui->stackedWidget_loopClosureEstimation, SLOT(setCurrentIndex(int)));
 	_ui->stackedWidget_loopClosureEstimation->setCurrentIndex(Parameters::defaultVisEstimationType());
-	_ui->loopClosure_forwardEst->setObjectName(Parameters::kVisForwardEstOnly().c_str());
 	_ui->loopClosure_bowEpipolarGeometryVar->setObjectName(Parameters::kVisEpipolarGeometryVar().c_str());
 	_ui->loopClosure_pnpReprojError->setObjectName(Parameters::kVisPnPReprojError().c_str());
 	_ui->loopClosure_pnpFlags->setObjectName(Parameters::kVisPnPFlags().c_str());
@@ -2030,6 +2035,7 @@ void PreferencesDialog::resetSettings(QGroupBox * groupBox)
 			_3dRenderingMaxDepth[i]->setValue(0.0);
 			_3dRenderingMinDepth[i]->setValue(0.0);
 			_3dRenderingRoiRatios[i]->setText("0.0 0.0 0.0 0.0");
+			_3dRenderingDepthConfidenceThr[i]->setValue(0);
 			_3dRenderingShowScans[i]->setChecked(true);
 			_3dRenderingShowFeatures[i]->setChecked(i==0?false:true);
 			_3dRenderingShowFrustums[i]->setChecked(false);
@@ -2548,6 +2554,7 @@ void PreferencesDialog::readGuiSettings(const QString & filePath)
 		_3dRenderingMaxDepth[i]->setValue(settings.value(QString("maxDepth%1").arg(i), _3dRenderingMaxDepth[i]->value()).toDouble());
 		_3dRenderingMinDepth[i]->setValue(settings.value(QString("minDepth%1").arg(i), _3dRenderingMinDepth[i]->value()).toDouble());
 		_3dRenderingRoiRatios[i]->setText(settings.value(QString("roiRatios%1").arg(i), _3dRenderingRoiRatios[i]->text()).toString());
+		_3dRenderingDepthConfidenceThr[i]->setValue(settings.value(QString("depthConf%1").arg(i), _3dRenderingDepthConfidenceThr[i]->value()).toInt());
 		_3dRenderingShowScans[i]->setChecked(settings.value(QString("showScans%1").arg(i), _3dRenderingShowScans[i]->isChecked()).toBool());
 		_3dRenderingShowFeatures[i]->setChecked(settings.value(QString("showFeatures%1").arg(i), _3dRenderingShowFeatures[i]->isChecked()).toBool());
 		_3dRenderingShowFrustums[i]->setChecked(settings.value(QString("showFrustums%1").arg(i), _3dRenderingShowFrustums[i]->isChecked()).toBool());
@@ -3156,6 +3163,7 @@ void PreferencesDialog::writeGuiSettings(const QString & filePath) const
 		settings.setValue(QString("maxDepth%1").arg(i), _3dRenderingMaxDepth[i]->value());
 		settings.setValue(QString("minDepth%1").arg(i), _3dRenderingMinDepth[i]->value());
 		settings.setValue(QString("roiRatios%1").arg(i), _3dRenderingRoiRatios[i]->text());
+		settings.setValue(QString("depthConf%1").arg(i), _3dRenderingDepthConfidenceThr[i]->value());
 		settings.setValue(QString("showScans%1").arg(i), _3dRenderingShowScans[i]->isChecked());
 		settings.setValue(QString("showFeatures%1").arg(i), _3dRenderingShowFeatures[i]->isChecked());
 		settings.setValue(QString("showFrustums%1").arg(i), _3dRenderingShowFrustums[i]->isChecked());
@@ -4810,8 +4818,6 @@ void PreferencesDialog::setParameter(const std::string & key, const std::string 
 	QWidget * obj = _ui->stackedWidget->findChild<QWidget*>(key.c_str());
 	if(obj)
 	{
-		uInsert(_parameters, ParametersPair(key, value));
-
 		QSpinBox * spin = qobject_cast<QSpinBox *>(obj);
 		QDoubleSpinBox * doubleSpin = qobject_cast<QDoubleSpinBox *>(obj);
 		QComboBox * combo = qobject_cast<QComboBox *>(obj);
@@ -4822,18 +4828,28 @@ void PreferencesDialog::setParameter(const std::string & key, const std::string 
 		bool ok;
 		if(spin)
 		{
-			spin->setValue(QString(value.c_str()).toInt(&ok));
+			int v = QString(value.c_str()).toInt(&ok);
 			if(!ok)
 			{
-				UERROR("Conversion failed from \"%s\" for parameter %s", value.c_str(), key.c_str());
+				UERROR("Conversion failed from \"%s\" for parameter %s. Original value (%d) is kept.", value.c_str(), key.c_str(), spin->value());
+			}
+			else
+			{
+				spin->setValue(v);
+				uInsert(_parameters, ParametersPair(key, value));
 			}
 		}
 		else if(doubleSpin)
 		{
-			doubleSpin->setValue(QString(value.c_str()).toDouble(&ok));
+			double v = QString(value.c_str()).toDouble(&ok);
 			if(!ok)
 			{
-				UERROR("Conversion failed from \"%s\" for parameter %s", value.c_str(), key.c_str());
+				UERROR("Conversion failed from \"%s\" for parameter %s. Original value (%f) is kept.", value.c_str(), key.c_str(), doubleSpin->value());
+			}
+			else
+			{
+				doubleSpin->setValue(v);
+				uInsert(_parameters, ParametersPair(key, value));
 			}
 		}
 		else if(combo)
@@ -4856,7 +4872,7 @@ void PreferencesDialog::setParameter(const std::string & key, const std::string 
 			int valueInt = QString(valueCpy.c_str()).toInt(&ok);
 			if(!ok)
 			{
-				UERROR("Conversion failed from \"%s\" for parameter %s", valueCpy.c_str(), key.c_str());
+				UERROR("Conversion failed from \"%s\" for parameter %s. Original value (%d) is kept.", valueCpy.c_str(), key.c_str(), combo->currentIndex());
 			}
 			else
 			{
@@ -4935,6 +4951,7 @@ void PreferencesDialog::setParameter(const std::string & key, const std::string 
 				if(ok)
 				{
 					combo->setCurrentIndex(valueInt);
+					uInsert(_parameters, ParametersPair(key, uNumber2Str(valueInt)));
 				}
 			}
 
@@ -4944,18 +4961,22 @@ void PreferencesDialog::setParameter(const std::string & key, const std::string 
 			_ui->checkBox_useOdomFeatures->blockSignals(true);
 			check->setChecked(uStr2Bool(value.c_str()));
 			_ui->checkBox_useOdomFeatures->blockSignals(false);
+			uInsert(_parameters, ParametersPair(key, uBool2Str(check->isChecked())));
 		}
 		else if(radio)
 		{
 			radio->setChecked(uStr2Bool(value.c_str()));
+			uInsert(_parameters, ParametersPair(key, uBool2Str(radio->isChecked())));
 		}
 		else if(lineEdit)
 		{
 			lineEdit->setText(value.c_str());
+			uInsert(_parameters, ParametersPair(key, value));
 		}
 		else if(groupBox)
 		{
 			groupBox->setChecked(uStr2Bool(value.c_str()));
+			uInsert(_parameters, ParametersPair(key, uBool2Str(groupBox->isChecked())));
 		}
 		else
 		{
@@ -6092,6 +6113,11 @@ std::vector<float> PreferencesDialog::getCloudRoiRatios(int index) const
 	}
 	return roiRatios;
 }
+unsigned char PreferencesDialog::getCloudConfidenceThr(int index) const
+{
+	UASSERT(index >= 0 && index <= 1);
+	return (unsigned char)_3dRenderingDepthConfidenceThr[index]->value();
+}
 int PreferencesDialog::getCloudColorScheme(int index) const
 {
 	UASSERT(index >= 0 && index <= 1);
@@ -7144,7 +7170,11 @@ Lidar * PreferencesDialog::createLidar()
 			// Connect to sensor
 
 			lidar = new LidarVLP16(
+#if BOOST_VERSION >= 108700  // Version 1.87.0
+					boost::asio::ip::make_address(uFormat("%ld.%ld.%ld.%ld",
+#else
 					boost::asio::ip::address_v4::from_string(uFormat("%ld.%ld.%ld.%ld",
+#endif
 							(size_t)_ui->spinBox_vlp16_ip1->value(),
 							(size_t)_ui->spinBox_vlp16_ip2->value(),
 							(size_t)_ui->spinBox_vlp16_ip3->value(),
