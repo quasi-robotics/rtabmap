@@ -3064,7 +3064,7 @@ bool Rtabmap::process(
 				rejectedLoopClosure = transform.isNull();
 				if(rejectedLoopClosure)
 				{
-					UWARN("Rejected loop closure %d -> %d: %s",
+					UINFO("Rejected loop closure %d -> %d: %s",
 							_loopClosureHypothesis.first, signature->id(), info.rejectedMsg.c_str());
 				}
 				else if(_maxLoopClosureDistance>0.0f && transform.getNorm() > _maxLoopClosureDistance)
