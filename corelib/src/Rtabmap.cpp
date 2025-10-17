@@ -3339,7 +3339,7 @@ bool Rtabmap::process(
 								_optimizationMaxError);
 						if(_optimizationMaxError > 0.0f && maxLinearErrorRatio > _optimizationMaxError)
 						{
-							UWARN("Rejecting localization (%d <-> %d) in this "
+							UINFO("Rejecting localization (%d <-> %d) in this "
 									"iteration because a wrong loop closure has been "
 									"detected after graph optimization, resulting in "
 									"a maximum graph error ratio of %f (edge %d->%d, type=%d, abs error=%f m, stddev=%f). The "
