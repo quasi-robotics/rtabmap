@@ -1,4 +1,5 @@
 /*
+Copyright (c) 2025 Felix Toft
 Copyright (c) 2010-2016, Mathieu Labbe - IntRoLab - Universite de Sherbrooke
 All rights reserved.
 
@@ -25,55 +26,61 @@ ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
-#ifndef ODOMETRYTHREAD_H_
-#define ODOMETRYTHREAD_H_
+#ifndef ODOMETRYCUVSLAM_H_
+#define ODOMETRYCUVSLAM_H_
 
-#include <rtabmap/core/rtabmap_core_export.h>
-#include <rtabmap/core/SensorEvent.h>
-#include <rtabmap/core/SensorData.h>
-#include <rtabmap/utilite/UThread.h>
-#include <rtabmap/utilite/UEventsHandler.h>
-#include <list>
+#include <rtabmap/core/Odometry.h>
+#include <memory>
+
+#ifdef RTABMAP_CUVSLAM
+#include <cuvslam.h>
+#include <ground_constraint.h>
+#include <cuda_runtime.h>
+#endif
 
 namespace rtabmap {
 
-class Odometry;
-
-class RTABMAP_CORE_EXPORT OdometryThread : public UThread, public UEventsHandler {
+class RTABMAP_CORE_EXPORT OdometryCuVSLAM : public Odometry
+{
 public:
-	// take ownership of Odometry
-	OdometryThread(Odometry * odometry, unsigned int dataBufferMaxSize = 1);
-	virtual ~OdometryThread();
+	OdometryCuVSLAM(const rtabmap::ParametersMap & parameters = rtabmap::ParametersMap());
+	virtual ~OdometryCuVSLAM();
 
-protected:
-	virtual bool handleEvent(UEvent * event);
-
-private:
-	virtual void mainLoopBegin();
-	virtual void mainLoopKill();
-
-	//============================================================
-	// MAIN LOOP
-	//============================================================
-	virtual void mainLoop();
-	void addData(const SensorEvent & data);
-	bool getData(SensorEvent & data);
+	virtual void reset(const Transform & initialPose = Transform::getIdentity());
+	virtual Odometry::Type getType() {return Odometry::kTypeCuVSLAM;}
 
 private:
-	USemaphore _dataAdded;
-	UMutex _dataMutex;
-	std::list<SensorEvent> _dataBuffer;
-	std::list<SensorData> _imuBuffer;
-	Odometry * _odometry;
-	unsigned int _dataBufferMaxSize;
-	bool _resetOdometry;
-	Transform _resetPose;
-	Transform _previousGuessPose;
-	double _oldestAsyncImuStamp;
-	double _newestAsyncImuStamp;
+	virtual Transform computeTransform(SensorData & image, const Transform & guess = Transform(), OdometryInfo * info = 0);
+
+private:
+#ifdef RTABMAP_CUVSLAM
+	CUVSLAM_TrackerHandle cuvslam_handle_;
+	CUVSLAM_GroundConstraintHandle ground_constraint_handle_;
+
+	std::vector<CUVSLAM_Camera> cuvslam_cameras_;
+	std::vector<std::array<float, 12>> intrinsics_;
+	
+	// State tracking
+	bool initialized_;
+	bool lost_;
+	bool tracking_;
+	bool planar_constraints_;
+	Transform previous_pose_;
+	double last_timestamp_;
+
+	//visualization
+	std::vector<CUVSLAM_Observation> observations_;
+	std::vector<CUVSLAM_Landmark> landmarks_;
+	
+	// GPU memory management
+	std::vector<uint8_t *> gpu_left_image_data_; // pointers to all gpu images
+	std::vector<uint8_t *> gpu_right_image_data_;
+	std::vector<size_t> gpu_left_image_sizes_; // size of one image
+	std::vector<size_t> gpu_right_image_sizes_;
+	cudaStream_t cuda_stream_;
+#endif
 };
 
-} // namespace rtabmap
+}
 
-
-#endif /* ODOMETRYTHREAD_H_ */
+#endif /* ODOMETRYCUVSLAM_H_ */

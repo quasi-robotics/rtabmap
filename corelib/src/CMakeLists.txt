@@ -41,6 +41,7 @@ SET(SRC_FILES
     camera/CameraMyntEye.cpp
     camera/CameraDepthAI.cpp
 	camera/CameraSeerSense.cpp
+	camera/CameraOrbbecSDK.cpp
     
     EpipolarGeometry.cpp
     VisualWord.cpp
@@ -101,6 +102,7 @@ SET(SRC_FILES
     odometry/OdometryVINSFusion.cpp
     odometry/OdometryOpenVINS.cpp
     odometry/OdometryOpen3D.cpp
+	odometry/OdometryCuVSLAM.cpp
     
     IMU.cpp
     IMUThread.cpp
@@ -389,6 +391,13 @@ IF(xvsdk_FOUND)
 		${xvsdk_LIBRARIES}
 	)
 ENDIF(xvsdk_FOUND)
+
+IF(OrbbecSDK_FOUND)
+	SET(LIBRARIES
+		${LIBRARIES}
+		ob::OrbbecSDK
+	)
+ENDIF(OrbbecSDK_FOUND)
 
 IF(TARGET OpenMP::OpenMP_CXX)
 	SET(LIBRARIES
@@ -763,6 +772,13 @@ IF(ORB_SLAM_FOUND)
 		${LIBRARIES}
 	)
 ENDIF(ORB_SLAM_FOUND)
+
+IF(CUVSLAM_FOUND)
+    SET(LIBRARIES
+		${LIBRARIES}
+		cuvslam::cuvslam
+	)
+ENDIF(CUVSLAM_FOUND)
 
 IF(GTSAM_FOUND)
 	# Make sure GTSAM is built with system Eigen, not the included one in its package

@@ -470,6 +470,7 @@ MainWindow::MainWindow(PreferencesDialog * prefDialog, QWidget * parent, bool sh
 	connect(_ui->actionDepthAI_oakdlite, SIGNAL(triggered()), this, SLOT(selectDepthAIOAKDLite()));
 	connect(_ui->actionDepthAI_oakdpro, SIGNAL(triggered()), this, SLOT(selectDepthAIOAKDPro()));
 	connect(_ui->actionXvisio_SeerSense, SIGNAL(triggered()), this, SLOT(selectXvisioSeerSense()));
+	connect(_ui->actionOrbbecSDK_astra2, SIGNAL(triggered()), this, SLOT(selectOrbbecSDK()));
 	connect(_ui->actionVelodyne_VLP_16, SIGNAL(triggered()), this, SLOT(selectVLP16()));
 	_ui->actionFreenect->setEnabled(CameraFreenect::available());
 	_ui->actionOpenNI_PCL->setEnabled(CameraOpenni::available());
@@ -499,6 +500,7 @@ MainWindow::MainWindow(PreferencesDialog * prefDialog, QWidget * parent, bool sh
     _ui->actionDepthAI_oakdlite->setEnabled(CameraDepthAI::available());
     _ui->actionDepthAI_oakdpro->setEnabled(CameraDepthAI::available());
 	_ui->actionXvisio_SeerSense->setEnabled(CameraSeerSense::available());
+	_ui->actionOrbbecSDK_astra2->setEnabled(CameraOrbbecSDK::available());
 	this->updateSelectSourceMenu();
 
 	connect(_ui->actionPreferences, SIGNAL(triggered()), this, SLOT(openPreferences()));
@@ -1795,6 +1797,7 @@ void MainWindow::processOdometry(const rtabmap::OdometryEvent & odom, bool dataI
 	//Process info
 	if(_preferencesDialog->isCacheSavedInFigures() || _ui->statsToolBox->isVisible())
 	{
+		UASSERT(odom.info().reg.covariance.total() == 36 && odom.info().reg.covariance.type() == CV_64FC1);
 		double linVar = uMax3(odom.info().reg.covariance.at<double>(0,0), odom.info().reg.covariance.at<double>(1,1)>=9999?0:odom.info().reg.covariance.at<double>(1,1), odom.info().reg.covariance.at<double>(2,2)>=9999?0:odom.info().reg.covariance.at<double>(2,2));
 		double angVar = uMax3(odom.info().reg.covariance.at<double>(3,3)>=9999?0:odom.info().reg.covariance.at<double>(3,3), odom.info().reg.covariance.at<double>(4,4)>=9999?0:odom.info().reg.covariance.at<double>(4,4), odom.info().reg.covariance.at<double>(5,5));
 		_ui->statsToolBox->updateStat("Odometry/Inliers/", _preferencesDialog->isTimeUsedInFigures()?data->stamp()-_firstStamp:(float)data->id(), (float)odom.info().reg.inliers, _preferencesDialog->isCacheSavedInFigures());
@@ -5337,6 +5340,7 @@ void MainWindow::updateSelectSourceMenu()
 	_ui->actionDepthAI_oakdlite->setChecked(_preferencesDialog->getSourceDriver() == PreferencesDialog::kSrcStereoDepthAI);
 	_ui->actionDepthAI_oakdpro->setChecked(_preferencesDialog->getSourceDriver() == PreferencesDialog::kSrcStereoDepthAI);
 	_ui->actionXvisio_SeerSense->setChecked(_preferencesDialog->getSourceDriver() == PreferencesDialog::kSrcSeerSense);
+	_ui->actionOrbbecSDK_astra2->setChecked(_preferencesDialog->getSourceDriver() == PreferencesDialog::kSrcOrbbecSDK);
 	_ui->actionVelodyne_VLP_16->setChecked(_preferencesDialog->getLidarSourceDriver() == PreferencesDialog::kSrcLidarVLP16);
 }
 
@@ -5995,7 +5999,7 @@ void MainWindow::startDetection()
 				_imuThread = 0;
 			}
 
-			if(!_sensorCapture->odomProvided() && !_preferencesDialog->isOdomDisabled())
+			if((!_sensorCapture->odomProvided() || _preferencesDialog->isOdomAsGuessEnabled()) && !_preferencesDialog->isOdomDisabled())
 			{
 				ParametersMap odomParameters = parameters;
 				if(_preferencesDialog->getOdomRegistrationApproach() < 3)
@@ -6053,7 +6057,7 @@ void MainWindow::startDetection()
 		}
 	}
 
-	if(_dataRecorder && _sensorCapture && _odomThread)
+	if(_dataRecorder && _sensorCapture)
 	{
 		UEventsManager::createPipe(_sensorCapture, _dataRecorder, "SensorEvent");
 	}
@@ -7211,6 +7215,11 @@ void MainWindow::selectK4W2()
 void MainWindow::selectK4A()
 {
 	_preferencesDialog->selectSourceDriver(PreferencesDialog::kSrcK4A);
+}
+
+void MainWindow::selectOrbbecSDK()
+{
+	_preferencesDialog->selectSourceDriver(PreferencesDialog::kSrcOrbbecSDK);
 }
 
 void MainWindow::selectRealSense()
