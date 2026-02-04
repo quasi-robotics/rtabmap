@@ -385,19 +385,19 @@ void Rtabmap::init(const ParametersMap & parameters, const std::string & databas
 					!_optimizeFromGraphEnd?_memory->getWorkingMem().lower_bound(1)->first:_memory->getWorkingMem().rbegin()->first,
 					false, _optimizedPoses, cov, &_constraints);
 		}
-		if(!_optimizedPoses.empty())
+		if(_optimizedPoses.lower_bound(1) != _optimizedPoses.end())
 		{
 			if(_restartAtOrigin)
 			{
-				UWARN("last localization pose is ignored (%s=true), assuming we start at the origin of the map.", Parameters::kRGBDStartAtOrigin().c_str());
-				lastPose = _optimizedPoses.begin()->second;
+				UWARN("last localization pose is ignored (%s=true), assuming we start at the first node of the map.", Parameters::kRGBDStartAtOrigin().c_str());
+				lastPose = _optimizedPoses.lower_bound(1)->second;
 			}
 			_lastLocalizationPose = lastPose;
 
 			UINFO("Loaded optimizedPoses=%d firstPose %d=%s lastLocalizationPose=%s",
 					_optimizedPoses.size(),
-					_optimizedPoses.begin()->first,
-					_optimizedPoses.begin()->second.prettyPrint().c_str(),
+					_optimizedPoses.lower_bound(1)->first,
+					_optimizedPoses.lower_bound(1)->second.prettyPrint().c_str(),
 					_lastLocalizationPose.prettyPrint().c_str());
 
 			if(_constraints.empty())
@@ -411,7 +411,7 @@ void Rtabmap::init(const ParametersMap & parameters, const std::string & databas
 			UTimer time;
 			std::map<int, float> likelihood;
 			likelihood.insert(std::make_pair(Memory::kIdVirtual, 1));
-			for(std::map<int, Transform>::iterator iter=_optimizedPoses.begin(); iter!=_optimizedPoses.end(); ++iter)
+			for(std::map<int, Transform>::iterator iter=_optimizedPoses.lower_bound(1); iter!=_optimizedPoses.end(); ++iter)
 			{
 				if(_memory->getSignature(iter->first))
 				{
@@ -507,6 +507,11 @@ void Rtabmap::close(bool databaseSaved, const std::string & ouputDatabasePath)
 	}
 	if(_memory)
 	{
+		if(_memory->isReadOnly() && databaseSaved)
+		{
+			UWARN("Database is read-only, latest optimized poses, latest localization pose and latest state of the memory are not saved.");
+			databaseSaved = false;
+		}
 		if(databaseSaved)
 		{
 			if(_memory->isGraphReduced() && _memory->isIncremental())
@@ -2613,6 +2618,7 @@ bool Rtabmap::process(
 	int loopClosureVisualInliers = 0; // for statistics
 	float loopClosureVisualInliersRatio = 0.0f;
 	int loopClosureVisualMatches = 0;
+	float loopClosureVisualVariance = 0.0f;
 	float loopClosureLinearVariance = 0.0f;
 	float loopClosureAngularVariance = 0.0f;
 	float loopClosureVisualInliersMeanDist = 0;
@@ -2795,6 +2801,7 @@ bool Rtabmap::process(
 									loopClosureVisualInliers = info.inliers;
 									loopClosureVisualInliersRatio = info.inliersRatio;
 									loopClosureVisualMatches = info.matches;
+									loopClosureVisualVariance = info.variance;
 
 									cv::Mat information = getInformation(info.covariance);
 									loopClosureLinearVariance = 1.0/information.at<double>(0,0);
@@ -3062,6 +3069,7 @@ bool Rtabmap::process(
 				loopClosureVisualInliers = info.inliers;
 				loopClosureVisualInliersRatio = info.inliersRatio;
 				loopClosureVisualMatches = info.matches;
+				loopClosureVisualVariance = info.variance;
 				rejectedLoopClosure = transform.isNull();
 				if(rejectedLoopClosure)
 				{
@@ -4049,6 +4057,7 @@ bool Rtabmap::process(
 			statistics_.addStatistic(Statistics::kLoopVisual_inliers(), loopClosureVisualInliers);
 			statistics_.addStatistic(Statistics::kLoopVisual_inliers_ratio(), loopClosureVisualInliersRatio);
 			statistics_.addStatistic(Statistics::kLoopVisual_matches(), loopClosureVisualMatches);
+			statistics_.addStatistic(Statistics::kLoopVisual_variance(), loopClosureVisualVariance);
 			statistics_.addStatistic(Statistics::kLoopLinear_variance(), loopClosureLinearVariance);
 			statistics_.addStatistic(Statistics::kLoopAngular_variance(), loopClosureAngularVariance);
 			statistics_.addStatistic(Statistics::kLoopLast_id(), _memory->getLastGlobalLoopClosureId());
@@ -5638,6 +5647,7 @@ int Rtabmap::detectMoreLoopClosures(
 		const ProgressState * processState,
 		float clusterRadiusMin)
 {
+	UDEBUG("");
 	UASSERT(iterations>0);
 
 	if(_graphOptimizer->iterations() <= 0)
