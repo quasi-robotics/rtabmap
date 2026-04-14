@@ -224,7 +224,7 @@ class RTABMAP_CORE_EXPORT Parameters
     RTABMAP_PARAM(Mem, BadSignaturesIgnored,        bool, false,    "Bad signatures are ignored.");
     RTABMAP_PARAM(Mem, InitWMWithAllNodes,          bool, false,    "Initialize the Working Memory with all nodes in Long-Term Memory. When false, it is initialized with nodes of the previous session.");
     RTABMAP_PARAM(Mem, DepthAsMask,                 bool, true,     "Use depth image as mask when extracting features for vocabulary.");
-    RTABMAP_PARAM(Mem, DepthMaskFloorThr,           float, 0.0,     uFormat("Filter floor from depth mask below specified threshold (m) before extracting features. 0 means disabled, negative means remove all objects above the floor threshold instead. Ignored if %s is false.", kMemDepthAsMask().c_str()));
+    RTABMAP_PARAM(Mem, DepthMaskFloorThr,           float, 0.0,     uFormat("Filter floor from depth mask below specified threshold (m) before extracting features. 0 means disabled. Ignored if %s is false.", kMemDepthAsMask().c_str()));
     RTABMAP_PARAM(Mem, StereoFromMotion,            bool, false,    uFormat("Triangulate features without depth using stereo from motion (odometry). It would be ignored if %s is true and the feature detector used supports masking.", kMemDepthAsMask().c_str()));
     RTABMAP_PARAM(Mem, ImagePreDecimation,          unsigned int, 1, uFormat("Decimation of the RGB image before visual feature detection. If depth size is larger than decimated RGB size, depth is decimated to be always at most equal to RGB size. If %s is true and if depth is smaller than decimated RGB, depth may be interpolated to match RGB size for feature detection.",kMemDepthAsMask().c_str()));
     RTABMAP_PARAM(Mem, ImagePostDecimation,         unsigned int, 1, uFormat("Decimation of the RGB image before saving it to database. If depth size is larger than decimated RGB size, depth is decimated to be always at most equal to RGB size. Decimation is done from the original image. If set to same value than %s, data already decimated is saved (no need to re-decimate the image).", kMemImagePreDecimation().c_str()));
@@ -294,7 +294,8 @@ class RTABMAP_CORE_EXPORT Parameters
     RTABMAP_PARAM(SIFT, PreciseUpscale,    bool, false,  "Whether to enable precise upscaling in the scale pyramid (OpenCV >= 4.8).");
     RTABMAP_PARAM(SIFT, RootSIFT,          bool, false,  "Apply RootSIFT normalization of the descriptors.");
     RTABMAP_PARAM(SIFT, Gpu,               bool, false,  "CudaSift: Use GPU version of SIFT. This option is enabled only if RTAB-Map is built with CudaSift dependency and GPUs are detected.");
-    RTABMAP_PARAM(SIFT, GaussianThreshold, float, 2.0,   "CudaSift: Threshold on difference of Gaussians for feature pruning. The higher the threshold, the less features are produced by the detector.");
+    RTABMAP_PARAM(SIFT, GaussianThreshold, float, 2.0,   "CudaSift: Threshold on difference of Gaussians for feature pruning. The higher the threshold, the less features with low response/hessian are produced by the detector.");
+    RTABMAP_PARAM(SIFT, MaxGaussianThreshold, float, 0.0,   uFormat("CudaSift: Maximum threshold on difference of Gaussians for feature pruning (ignored if smaller or equal than %s). The lower the threshold, the less features with high response/hessian are produced by the detector.", kSIFTGaussianThreshold().c_str()));
     RTABMAP_PARAM(SIFT, Upscale,           bool, false,  "CudaSift: Whether to enable upscaling.");
 
     RTABMAP_PARAM(BRIEF, Bytes,            int, 32,      "Bytes is a length of descriptor in bytes. It can be equal 16, 32 or 64 bytes.");
@@ -464,7 +465,7 @@ class RTABMAP_CORE_EXPORT Parameters
     RTABMAP_PARAM(GTSAM, IncRelinearizeSkip,       int, 1, "Only relinearize any variables every X calls to ISAM2::update(). See GTSAM::ISAM2 doc for more info.");
 
     // Odometry
-    RTABMAP_PARAM(Odom, Strategy,               int, 0,       "0=Frame-to-Map (F2M) 1=Frame-to-Frame (F2F) 2=Fovis 3=viso2 4=DVO-SLAM 5=ORB_SLAM 6=OKVIS 7=LOAM 8=MSCKF_VIO 9=VINS-Fusion 10=OpenVINS 11=FLOAM 12=Open3D 13=cuVSLAM");
+    RTABMAP_PARAM(Odom, Strategy,               int, 0,       "0=Frame-to-Map (F2M) 1=Frame-to-Frame (F2F) 2=Fovis 3=viso2 4=DVO-SLAM 5=ORB_SLAM 6=OKVIS 7=LOAM 8=MSCKF_VIO 9=VINS-Fusion 10=OpenVINS 11=FLOAM 12=Open3D 13=cuVSLAM 14=LIO-SAM");
     RTABMAP_PARAM(Odom, ResetCountdown,         int, 0,       "Automatically reset odometry after X consecutive images where odometry cannot be computed (a value of 0 disables auto-reset). When a reset occurs, odometry resumes from the last successfully computed pose with large covariance to trigger a new map. If external odometry is used, it will also be reset based on the motion estimated relative to the last computed pose but no large covariance will be received, so that a new map won't be triggered.");
     RTABMAP_PARAM(Odom, Holonomic,              bool, true,   "If the robot is holonomic (strafing commands can be issued). If not, y value will be estimated from x and yaw values (y=x*tan(yaw)).");
     RTABMAP_PARAM(Odom, FillInfoData,           bool, true,   "Fill info with data (inliers/outliers features).");
@@ -686,6 +687,21 @@ class RTABMAP_CORE_EXPORT Parameters
     // Odometry cuVSLAM
     RTABMAP_PARAM(OdomCuVSLAM, MulticamMode,        int, 0,  "cuVSLAM multicam_mode setting: 0=moderate, 1=performance, 2=precision.");
 
+    // Odometry LIO-SAM
+    RTABMAP_PARAM_STR(OdomLIOSAM, ConfigPath,  "", "Path to LIO-SAM params.yaml config file. When set, sensor/IMU/feature parameters are loaded from the file and the individual parameters below are ignored.");
+    RTABMAP_PARAM(OdomLIOSAM, Sensor,       int,   0,     "LiDAR sensor: 0=Velodyne, 1=Ouster, 2=Livox");
+    RTABMAP_PARAM(OdomLIOSAM, NScan,        int,   16,    "Number of LiDAR channels (16, 32, 64, 128).");
+    RTABMAP_PARAM(OdomLIOSAM, HorizonScan,  int,   1800,  "Horizontal resolution (Velodyne:1800, Ouster:512/1024/2048).");
+    RTABMAP_PARAM(OdomLIOSAM, ImuAccNoise,  float, 0.01,  "IMU accelerometer white noise.");
+    RTABMAP_PARAM(OdomLIOSAM, ImuGyrNoise,  float, 0.001, "IMU gyroscope white noise.");
+    RTABMAP_PARAM(OdomLIOSAM, ImuAccBiasN,  float, 0.0002,"IMU accelerometer bias noise.");
+    RTABMAP_PARAM(OdomLIOSAM, ImuGyrBiasN,  float, 0.00003,"IMU gyroscope bias noise.");
+    RTABMAP_PARAM(OdomLIOSAM, ImuGravity,   float, 9.80511,"Gravity magnitude.");
+    RTABMAP_PARAM(OdomLIOSAM, EdgeThreshold,float, 1.0,   "Edge feature curvature threshold.");
+    RTABMAP_PARAM(OdomLIOSAM, SurfThreshold,float, 0.1,   "Surface feature curvature threshold.");
+    RTABMAP_PARAM(OdomLIOSAM, LinVar,       float, 0.01,  "Linear output variance.");
+    RTABMAP_PARAM(OdomLIOSAM, AngVar,       float, 0.01,  "Angular output variance.");
+
     // Common registration parameters
     RTABMAP_PARAM(Reg, RepeatOnce,               bool, true,    "Do a second registration with the output of the first registration as guess. Only done if no guess was provided for the first registration (like on loop closure). It can be useful if the registration approach used can use a guess to get better matches.");
     RTABMAP_PARAM(Reg, Strategy,                 int, 0,        "0=Vis, 1=Icp, 2=VisIcp");
@@ -724,7 +740,7 @@ class RTABMAP_CORE_EXPORT Parameters
     RTABMAP_PARAM(Vis, MaxDepth,                  float, 0,     "Max depth of the features (0 means no limit).");
     RTABMAP_PARAM(Vis, MinDepth,                  float, 0,     "Min depth of the features (0 means no limit).");
     RTABMAP_PARAM(Vis, DepthAsMask,               bool,  true,  "Use depth image as mask when extracting features.");
-    RTABMAP_PARAM(Vis, DepthMaskFloorThr,         float, 0.0,    uFormat("Filter floor from depth mask below specified threshold (m) before extracting features. 0 means disabled, negative means remove all objects above the floor threshold instead. Ignored if %s is false.", kVisDepthAsMask().c_str()));
+    RTABMAP_PARAM(Vis, DepthMaskFloorThr,         float, 0.0,    uFormat("Filter floor from depth mask below specified threshold (m) before extracting features. 0 means disabled. Ignored if %s is false.", kVisDepthAsMask().c_str()));
     RTABMAP_PARAM_STR(Vis, RoiRatios,        "0.0 0.0 0.0 0.0", "Region of interest ratios [left, right, top, bottom].");
     RTABMAP_PARAM(Vis, SubPixWinSize,             int,   3,     "See cv::cornerSubPix().");
     RTABMAP_PARAM(Vis, SubPixIterations,          int,   0,     "See cv::cornerSubPix(). 0 disables sub pixel refining.");
@@ -740,8 +756,11 @@ class RTABMAP_CORE_EXPORT Parameters
     RTABMAP_PARAM(Vis, CorFlowIterations,         int,   30,    uFormat("[%s=1] See cv::calcOpticalFlowPyrLK(). Used for optical flow approach.", kVisCorType().c_str()));
     RTABMAP_PARAM(Vis, CorFlowEps,                float, 0.01,  uFormat("[%s=1] See cv::calcOpticalFlowPyrLK(). Used for optical flow approach.", kVisCorType().c_str()));
     RTABMAP_PARAM(Vis, CorFlowMaxLevel,           int,   3,     uFormat("[%s=1] See cv::calcOpticalFlowPyrLK(). Used for optical flow approach.", kVisCorType().c_str()));
-    RTABMAP_PARAM(Vis, CorFlowGpu,                bool,  false, uFormat("[%s=1] Enable GPU version of the optical flow approach (only available if OpenCV is built with CUDA).", kVisCorType().c_str()));
-#if defined(RTABMAP_G2O) || defined(RTABMAP_ORB_SLAM)
+    RTABMAP_PARAM(Vis, CorFlowUseMinEigenVals,    bool,  true,  uFormat("[%s=1] See cv::calcOpticalFlowPyrLK(). Used for optical flow approach. Use minimum eigen values as an error measure, otherwise L1 distance between patches is used as an error measure.", kVisCorType().c_str()));
+    RTABMAP_PARAM(Vis, CorFlowMinEigThreshold,    float, 1e-4,  uFormat("[%s=true] If the minimum eigenvalue of a feature's spatial gradient matrix is less than this threshold, then the feature is filtered out.", kVisCorFlowUseMinEigenVals().c_str()));
+    RTABMAP_PARAM(Vis, CorFlowErrorThreshold,     float, 20,    uFormat("[%s=false] Filter out features with error greater than this threshold.", kVisCorFlowUseMinEigenVals().c_str()));
+    RTABMAP_PARAM(Vis, CorFlowGpu,                bool,  false, uFormat("[%s=1] Enable GPU version of the optical flow approach (only available if OpenCV is built with CUDA). Note that %s is not used in the GPU implementation.", kVisCorType().c_str(), kVisCorFlowUseMinEigenVals().c_str()));
+    #if defined(RTABMAP_G2O) || defined(RTABMAP_ORB_SLAM)
     RTABMAP_PARAM(Vis, BundleAdjustment,          int,   1,     "Optimization with bundle adjustment: 0=disabled, 1=g2o, 2=cvsba, 3=Ceres.");
 #else
     RTABMAP_PARAM(Vis, BundleAdjustment,          int,   0,     "Optimization with bundle adjustment: 0=disabled, 1=g2o, 2=cvsba, 3=Ceres.");
@@ -818,7 +837,10 @@ class RTABMAP_CORE_EXPORT Parameters
     RTABMAP_PARAM(Stereo, OpticalFlow,           bool, true,    "Use optical flow to find stereo correspondences, otherwise a simple block matching approach is used.");
     RTABMAP_PARAM(Stereo, SSD,                   bool, true,    uFormat("[%s=false] Use Sum of Squared Differences (SSD) window, otherwise Sum of Absolute Differences (SAD) window is used.", kStereoOpticalFlow().c_str()));
     RTABMAP_PARAM(Stereo, Eps,                   double, 0.01,  uFormat("[%s=true] Epsilon stop criterion.", kStereoOpticalFlow().c_str()));
-    RTABMAP_PARAM(Stereo, Gpu,                   bool, false,   uFormat("[%s=true] Enable GPU version of the optical flow approach (only available if OpenCV is built with CUDA).", kStereoOpticalFlow().c_str()));
+    RTABMAP_PARAM(Stereo, UseMinEigenVals,       bool, true,    uFormat("[%s=true] Use minimum eigen values as an error measure, otherwise L1 distance between patches is used as an error measure.", kStereoOpticalFlow().c_str()));
+    RTABMAP_PARAM(Stereo, MinEigThreshold,       double, 1e-4,  uFormat("[%s=true] If the minimum eigenvalue of a feature's spatial gradient matrix is less than this threshold, then the feature is filtered out.", kStereoUseMinEigenVals().c_str()));
+    RTABMAP_PARAM(Stereo, ErrorThreshold,        double, 50,    uFormat("[%s=false] Filter out features with error greater than this threshold.", kStereoUseMinEigenVals().c_str()));
+    RTABMAP_PARAM(Stereo, Gpu,                   bool, false,   uFormat("[%s=true] Enable GPU version of the optical flow approach (only available if OpenCV is built with CUDA). Note that %s is not used in the GPU implementation.", kStereoOpticalFlow().c_str(), kStereoUseMinEigenVals().c_str()));
 
     RTABMAP_PARAM(Stereo, DenseStrategy,         int, 0,  "0=cv::StereoBM, 1=cv::StereoSGBM");
 

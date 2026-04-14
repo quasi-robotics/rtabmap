@@ -98,6 +98,7 @@ SET(SRC_FILES
     odometry/OdometryORBSLAM3.cpp
     odometry/OdometryLOAM.cpp
     odometry/OdometryFLOAM.cpp
+    odometry/OdometryLIOSAM.cpp
     odometry/OdometryMSCKF.cpp
     odometry/OdometryVINSFusion.cpp
     odometry/OdometryOpenVINS.cpp
@@ -604,6 +605,18 @@ IF(floam_FOUND)
     )
 ENDIF(floam_FOUND)
 
+IF(lio_sam_FOUND)
+    SET(INCLUDE_DIRS
+        ${INCLUDE_DIRS}
+        ${lio_sam_INCLUDE_DIRS}
+    )
+    link_directories(${lio_sam_LIBRARY_DIRS})
+    SET(LIBRARIES
+        ${LIBRARIES}
+        lio_sam_core
+    )
+ENDIF(lio_sam_FOUND)
+
 IF(ZED_FOUND)
 	SET(INCLUDE_DIRS
 		${INCLUDE_DIRS}
@@ -791,37 +804,14 @@ IF(CUVSLAM_FOUND)
 ENDIF(CUVSLAM_FOUND)
 
 IF(GTSAM_FOUND)
-	# Make sure GTSAM is built with system Eigen, not the included one in its package
-	IF(GTSAM_INCLUDE_DIR)
-		SET(INCLUDE_DIRS 
-			${INCLUDE_DIRS} 
-			${GTSAM_INCLUDE_DIR} 
-		)
-	ELSE()
-		SET(INCLUDE_DIRS 
-			${INCLUDE_DIRS} 
-			${GTSAM_INCLUDE_DIRS}
-		)
-	ENDIF()
 	SET(SRC_FILES
     	${SRC_FILES}
 		optimizer/gtsam/GravityFactor.cpp
 	)
-	IF(WIN32)
-		# GTSAM should be built in STATIC on Windows to avoid "error C2338: THIS_METHOD_IS_ONLY_FOR_1x1_EXPRESSIONS" when building GTSAM
-		add_definitions("-DGTSAM_IMPORT_STATIC") 
-	ENDIF(WIN32)
 	SET(LIBRARIES
 		${LIBRARIES}
-		gtsam # Windows: Place static libs at the end
+		gtsam
 	)
-	IF(WIN32)
-		#explicitly add metis target on windows (after gtsam target)
-		SET(LIBRARIES
-			${LIBRARIES}
-			metis
-		)
-	ENDIF(WIN32)
 ENDIF(GTSAM_FOUND)
 
 IF(WITH_MADGWICK)
