@@ -113,11 +113,14 @@ ParametersMap Parameters::deserialize(const std::string & parameters)
 	std::list<std::string> tuplets = uSplit(parameters, ';');
 	for(std::list<std::string>::iterator iter=tuplets.begin(); iter!=tuplets.end(); ++iter)
 	{
-		std::list<std::string> p = uSplit(*iter, ':');
-		if(p.size() == 2)
+		// Split on the FIRST ':' only. Using uSplit() here would discard
+		// empty tokens, so a tuplet like "Marker/Lengths:" (legitimate empty
+		// string value) would lose the value side and be dropped entirely.
+		size_t colonPos = iter->find(':');
+		if(colonPos != std::string::npos && colonPos > 0)
 		{
-			std::string key = p.front();
-			std::string value = p.back();
+			std::string key = iter->substr(0, colonPos);
+			std::string value = iter->substr(colonPos + 1);
 
 			// look for old parameter name
 			bool addParameter = true;
@@ -238,6 +241,9 @@ const std::map<std::string, std::pair<bool, std::string> > & Parameters::getRemo
 	{
 		// removed parameters
 
+		// 0.23.7
+		removedParameters_.insert(std::make_pair("Marker/CornerRefinementMethod", std::make_pair(true, Parameters::kMarkerOpenCVCornerRefinementMethod())));
+
 		// 0.23.1
 		removedParameters_.insert(std::make_pair("OdomVINS/ConfigPath",    std::make_pair(true, Parameters::kOdomVINSFusionConfigPath())));
 
@@ -290,7 +296,7 @@ const std::map<std::string, std::pair<bool, std::string> > & Parameters::getRemo
 		removedParameters_.insert(std::make_pair("Aruco/MaxDepthError",          std::make_pair(true,  Parameters::kMarkerMaxDepthError())));
 		removedParameters_.insert(std::make_pair("Aruco/VarianceLinear",         std::make_pair(true,  Parameters::kMarkerVarianceLinear())));
 		removedParameters_.insert(std::make_pair("Aruco/VarianceAngular",        std::make_pair(true,  Parameters::kMarkerVarianceAngular())));
-		removedParameters_.insert(std::make_pair("Aruco/CornerRefinementMethod", std::make_pair(true,  Parameters::kMarkerCornerRefinementMethod())));
+		removedParameters_.insert(std::make_pair("Aruco/CornerRefinementMethod", std::make_pair(true,  Parameters::kMarkerOpenCVCornerRefinementMethod())));
 
 		// 0.17.5
 		removedParameters_.insert(std::make_pair("Grid/OctoMapOccupancyThr",     std::make_pair(true,  Parameters::kGridGlobalOccupancyThr())));
@@ -678,6 +684,12 @@ ParametersMap Parameters::parseArguments(int argc, char * argv[], bool onlyParam
 #endif
 				str = "With FastCV:";
 #ifdef RTABMAP_FASTCV
+				std::cout << str << std::setw(spacing - str.size()) << "true" << std::endl;
+#else
+				std::cout << str << std::setw(spacing - str.size()) << "false" << std::endl;
+#endif
+				str = "With AprilTag:";
+#ifdef RTABMAP_APRILTAG
 				std::cout << str << std::setw(spacing - str.size()) << "true" << std::endl;
 #else
 				std::cout << str << std::setw(spacing - str.size()) << "false" << std::endl;

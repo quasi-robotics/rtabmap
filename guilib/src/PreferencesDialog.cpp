@@ -475,15 +475,14 @@ PreferencesDialog::PreferencesDialog(QWidget * parent) :
 	_ui->checkBox_showOdomFrustums->setChecked(false);
 #endif
 
-	//if OpenCV < 3.4.2
-#if CV_MAJOR_VERSION < 3 || (CV_MAJOR_VERSION == 3 && (CV_MINOR_VERSION <4 || (CV_MINOR_VERSION ==4 && CV_SUBMINOR_VERSION<2)))
-	_ui->ArucoDictionary->setItemData(17, 0, Qt::UserRole - 1);
-	_ui->ArucoDictionary->setItemData(18, 0, Qt::UserRole - 1);
-	_ui->ArucoDictionary->setItemData(19, 0, Qt::UserRole - 1);
-	_ui->ArucoDictionary->setItemData(20, 0, Qt::UserRole - 1);
+#if !defined(HAVE_OPENCV_ARUCO) && !defined(RTABMAP_APRILTAG)
+	_ui->label_markerDetection->setText(_ui->label_markerDetection->text()+" This option works only if OpenCV has been built with \"aruco\" module and/or RTAB-Map has been built with AprilTag library support.");
 #endif
 #ifndef HAVE_OPENCV_ARUCO
-	_ui->label_markerDetection->setText(_ui->label_markerDetection->text()+" This option works only if OpenCV has been built with \"aruco\" module.");
+	_ui->MarkerStrategy->setItemData(0, 0, Qt::UserRole - 1);
+#endif
+#ifndef RTABMAP_APRILTAG
+	_ui->MarkerStrategy->setItemData(1, 0, Qt::UserRole - 1);
 #endif
 
 #ifndef RTABMAP_MADGWICK
@@ -761,6 +760,7 @@ PreferencesDialog::PreferencesDialog(QWidget * parent) :
 	connect(_ui->source_checkBox_ignoreFeatures, SIGNAL(stateChanged(int)), this, SLOT(makeObsoleteSourcePanel()));
 	connect(_ui->source_checkBox_ignorePriors, SIGNAL(stateChanged(int)), this, SLOT(makeObsoleteSourcePanel()));
 	connect(_ui->source_checkBox_ignoreIMU, SIGNAL(stateChanged(int)), this, SLOT(makeObsoleteSourcePanel()));
+	connect(_ui->source_checkBox_intermediateNodesAreNormalNodes, SIGNAL(stateChanged(int)), this, SLOT(makeObsoleteSourcePanel()));
 	connect(_ui->source_spinBox_databaseStartId, SIGNAL(valueChanged(int)), this, SLOT(makeObsoleteSourcePanel()));
 	connect(_ui->source_spinBox_databaseStopId, SIGNAL(valueChanged(int)), this, SLOT(makeObsoleteSourcePanel()));
 	connect(_ui->source_checkBox_useDbStamps, SIGNAL(stateChanged(int)), this, SLOT(makeObsoleteSourcePanel()));
@@ -1750,18 +1750,30 @@ PreferencesDialog::PreferencesDialog(QWidget * parent) :
 	_ui->stereosgbm_mode->setObjectName(Parameters::kStereoSGBMMode().c_str());
 
 	// Aruco marker
-	_ui->ArucoDictionary->setObjectName(Parameters::kMarkerDictionary().c_str());
-	_ui->ArucoMarkerLength->setObjectName(Parameters::kMarkerLength().c_str());
-	_ui->ArucoMaxDepthError->setObjectName(Parameters::kMarkerMaxDepthError().c_str());
-	_ui->ArucoVarianceLinear->setObjectName(Parameters::kMarkerVarianceLinear().c_str());
-	_ui->ArucoVarianceAngular->setObjectName(Parameters::kMarkerVarianceAngular().c_str());
-	_ui->ArucoVarianceOrientationIgnored->setObjectName(Parameters::kMarkerVarianceOrientationIgnored().c_str());
-	_ui->ArucoMarkerRangeMin->setObjectName(Parameters::kMarkerMinRange().c_str());
-	_ui->ArucoMarkerRangeMax->setObjectName(Parameters::kMarkerMaxRange().c_str());
-	_ui->ArucoMarkerPriors->setObjectName(Parameters::kMarkerPriors().c_str());
-	_ui->ArucoPriorsVarianceLinear->setObjectName(Parameters::kMarkerPriorsVarianceLinear().c_str());
-	_ui->ArucoPriorsVarianceAngular->setObjectName(Parameters::kMarkerPriorsVarianceAngular().c_str());
-	_ui->ArucoCornerRefinementMethod->setObjectName(Parameters::kMarkerCornerRefinementMethod().c_str());
+	_ui->MarkerStrategy->setObjectName(Parameters::kMarkerStrategy().c_str());
+	connect(_ui->MarkerStrategy, SIGNAL(currentIndexChanged(int)), _ui->stackedWidget_markerStrategy, SLOT(setCurrentIndex(int)));
+	connect(_ui->MarkerStrategy, SIGNAL(currentIndexChanged(int)), this, SLOT(updateAvailableMarkerDictionaries()));
+	_ui->MarkerStrategy->setCurrentIndex(Parameters::defaultMarkerStrategy());
+	updateAvailableMarkerDictionaries();
+	_ui->MarkerDictionary->setObjectName(Parameters::kMarkerDictionary().c_str());
+	_ui->MarkerLength->setObjectName(Parameters::kMarkerLength().c_str());
+	_ui->MarkerLengths->setObjectName(Parameters::kMarkerLengths().c_str());
+	_ui->MarkerMaxDepthError->setObjectName(Parameters::kMarkerMaxDepthError().c_str());
+	_ui->MarkerVarianceLinear->setObjectName(Parameters::kMarkerVarianceLinear().c_str());
+	_ui->MarkerVarianceAngular->setObjectName(Parameters::kMarkerVarianceAngular().c_str());
+	_ui->MarkerVarianceOrientationIgnored->setObjectName(Parameters::kMarkerVarianceOrientationIgnored().c_str());
+	_ui->MarkerRangeMin->setObjectName(Parameters::kMarkerMinRange().c_str());
+	_ui->MarkerRangeMax->setObjectName(Parameters::kMarkerMaxRange().c_str());
+	_ui->MarkerPriors->setObjectName(Parameters::kMarkerPriors().c_str());
+	_ui->MarkerPriorsVarianceLinear->setObjectName(Parameters::kMarkerPriorsVarianceLinear().c_str());
+	_ui->MarkerPriorsVarianceAngular->setObjectName(Parameters::kMarkerPriorsVarianceAngular().c_str());
+	_ui->OpenCVCornerRefinementMethod->setObjectName(Parameters::kMarkerOpenCVCornerRefinementMethod().c_str());
+	_ui->apriltag_nthreads->setObjectName(Parameters::kMarkerAprilTagNThreads().c_str());
+	_ui->apriltag_quad_decimate->setObjectName(Parameters::kMarkerAprilTagQuadDecimate().c_str());
+	_ui->apriltag_quad_sigma->setObjectName(Parameters::kMarkerAprilTagQuadSigma().c_str());
+	_ui->apriltag_refine_edges->setObjectName(Parameters::kMarkerAprilTagRefineEdges().c_str());
+	_ui->apriltag_decode_sharpening->setObjectName(Parameters::kMarkerAprilTagDecodeSharpening().c_str());
+	_ui->apriltag_debug->setObjectName(Parameters::kMarkerAprilTagDebug().c_str());
 
 	// IMU filter
 	_ui->doubleSpinBox_imuFilterMadgwickGain->setObjectName(Parameters::kImuFilterMadgwickGain().c_str());
@@ -2229,6 +2241,7 @@ void PreferencesDialog::resetSettings(QGroupBox * groupBox)
 		_ui->source_checkBox_ignoreFeatures->setChecked(true);
 		_ui->source_checkBox_ignorePriors->setChecked(false);
 		_ui->source_checkBox_ignoreIMU->setChecked(false);
+		_ui->source_checkBox_intermediateNodesAreNormalNodes->setChecked(false);
 		_ui->source_spinBox_databaseStartId->setValue(0);
 		_ui->source_spinBox_databaseStopId->setValue(0);
 		_ui->source_lineEdit_databaseCameraIndex->setText("");
@@ -2991,6 +3004,7 @@ void PreferencesDialog::readCameraSettings(const QString & filePath)
 	_ui->source_checkBox_ignoreFeatures->setChecked(settings.value("ignoreFeatures", _ui->source_checkBox_ignoreFeatures->isChecked()).toBool());
 	_ui->source_checkBox_ignorePriors->setChecked(settings.value("ignorePriors", _ui->source_checkBox_ignorePriors->isChecked()).toBool());
 	_ui->source_checkBox_ignoreIMU->setChecked(settings.value("ignoreImu", _ui->source_checkBox_ignoreIMU->isChecked()).toBool());
+	_ui->source_checkBox_intermediateNodesAreNormalNodes->setChecked(settings.value("intermediateNodesAreNormalNodes", _ui->source_checkBox_intermediateNodesAreNormalNodes->isChecked()).toBool());
 	
 	_ui->source_spinBox_databaseStartId->setValue(settings.value("startId", _ui->source_spinBox_databaseStartId->value()).toInt());
 	_ui->source_spinBox_databaseStopId->setValue(settings.value("stopId", _ui->source_spinBox_databaseStopId->value()).toInt());
@@ -3611,6 +3625,7 @@ void PreferencesDialog::writeCameraSettings(const QString & filePath) const
 	settings.setValue("ignoreFeatures",  _ui->source_checkBox_ignoreFeatures->isChecked());
 	settings.setValue("ignorePriors",  _ui->source_checkBox_ignorePriors->isChecked());
 	settings.setValue("ignoreImu",  _ui->source_checkBox_ignoreIMU->isChecked());
+	settings.setValue("intermediateNodesAreNormalNodes", _ui->source_checkBox_intermediateNodesAreNormalNodes->isChecked());
 	settings.setValue("startId",          _ui->source_spinBox_databaseStartId->value());
 	settings.setValue("stopId",          _ui->source_spinBox_databaseStopId->value());
 	settings.setValue("cameraIndices",       _ui->source_lineEdit_databaseCameraIndex->text());
@@ -3934,15 +3949,36 @@ bool PreferencesDialog::validateForm()
 		_ui->checkbox_odomDisabled->setChecked(false);
 	}
 
-#if CV_MAJOR_VERSION < 3 || (CV_MAJOR_VERSION == 3 && (CV_MINOR_VERSION <4 || (CV_MINOR_VERSION ==4 && CV_SUBMINOR_VERSION<2)))
-	if(_ui->ArucoDictionary->currentIndex()>=17)
-	{
-		QMessageBox::warning(this, tr("Parameter warning"),
-				tr("ArUco dictionary: cannot select AprilTag dictionary, OpenCV version should be at least 3.4.2. Setting back to 0."));
-		_ui->ArucoDictionary->setCurrentIndex(0);
-	}
-#endif
 
+	if(_ui->MarkerStrategy->currentIndex() == 0)
+	{
+#if CV_MAJOR_VERSION < 3 || (CV_MAJOR_VERSION == 3 && (CV_MINOR_VERSION <4 || (CV_MINOR_VERSION ==4 && CV_SUBMINOR_VERSION<2)))
+		if(_ui->MarkerDictionary->currentIndex()>=17)
+		{
+			QMessageBox::warning(this, tr("Parameter warning"),
+					tr("opencv-aruco: cannot use the selected dictionary (%1), OpenCV version should be at least 3.4.2. Setting back to 0.").arg(_ui->MarkerDictionary->currentIndex()));
+			_ui->MarkerDictionary->setCurrentIndex(0);
+		}
+#elif CV_MAJOR_VERSION < 4 || (CV_MAJOR_VERSION == 4 && CV_MINOR_VERSION <8)
+		if(_ui->MarkerDictionary->currentIndex()>=21)
+		{
+			QMessageBox::warning(this, tr("Parameter warning"),
+					tr("Opencv Strategy: cannot use selected dictionary (%1), OpenCV version should be at least 4.8.0. Setting back to 0.").arg(_ui->MarkerDictionary->currentIndex()));
+			_ui->MarkerDictionary->setCurrentIndex(0);
+		}
+#endif
+	}
+	else if(_ui->MarkerStrategy->currentIndex() == 1)
+	{
+#ifndef RTABMAP_APRILTAG_WITH_ARUCO
+		if(_ui->MarkerDictionary->currentIndex() < 17 || _ui->MarkerDictionary->currentIndex() == 21)
+		{
+			QMessageBox::warning(this, tr("Parameter warning"),
+					tr("AprilTag Strategy: cannot use selected dictionary (%1), AprilTag should be built with aruco support. Setting back to 17.").arg(_ui->MarkerDictionary->currentIndex()));
+			_ui->MarkerDictionary->setCurrentIndex(17);
+		}
+#endif
+	}
 	return true;
 }
 
@@ -5569,6 +5605,64 @@ void PreferencesDialog::updateGlobalDescriptorVisibility()
 	_ui->groupBox_pydescriptor->setVisible(_ui->comboBox_globalDescriptorExtractor->currentIndex() == 1);
 }
 
+void PreferencesDialog::updateAvailableMarkerDictionaries()
+{
+	Qt::ItemFlags enableFlags = Qt::ItemFlags(Qt::ItemIsEnabled) | Qt::ItemIsSelectable;
+	for(int i=0;i<_ui->MarkerDictionary->count();++i) {
+		_ui->MarkerDictionary->setItemData(i, QVariant(static_cast<int>(enableFlags)), Qt::UserRole - 1); 
+	}
+
+	if(_ui->MarkerStrategy->currentIndex() == 1) // AprilTag Strategy is selected
+	{
+		// ARUCO_ORIGINAL not available with AprilTag lib
+		_ui->MarkerDictionary->setItemData(16, 0, Qt::UserRole - 1);
+#ifndef RTABMAP_APRILTAG_WITH_ARUCO
+		// disable all aruco dictionaries
+		for(int i=0;i<17;++i) {
+			_ui->MarkerDictionary->setItemData(i, 0, Qt::UserRole - 1); 
+		}
+		_ui->MarkerDictionary->setItemData(21, 0, Qt::UserRole - 1);
+		if(_ui->MarkerDictionary->currentIndex() < 17 || _ui->MarkerDictionary->currentIndex() > 20)
+		{
+			_ui->MarkerDictionary->setCurrentIndex(20); // 36h11 by default
+		}
+#endif
+	}
+	else //if(_ui->MarkerStrategy->currentIndex() == 0) // OpenCV Strategy is selected
+	{
+		//if OpenCV < 3.4.2
+#if CV_MAJOR_VERSION < 3 || (CV_MAJOR_VERSION == 3 && (CV_MINOR_VERSION <4 || (CV_MINOR_VERSION ==4 && CV_SUBMINOR_VERSION<2)))
+		// disable all apriltag dictionaries
+		for(int i=17;i<21;++i) {
+			_ui->MarkerDictionary->setItemData(i, 0, Qt::UserRole - 1); 
+		}
+		if(_ui->MarkerDictionary->currentIndex() >=17 && _ui->MarkerDictionary->currentIndex() <= 20)
+		{
+			_ui->MarkerDictionary->setCurrentIndex(Parameters::defaultMarkerDictionary());
+		}
+#else
+		if(_ui->MarkerDictionary->currentIndex() >=17 && _ui->MarkerDictionary->currentIndex() <= 20)
+		{
+			// If apriltag is selected, select apriltag refinement by default
+			_ui->OpenCVCornerRefinementMethod->setCurrentIndex(3);
+		}
+		else if(_ui->OpenCVCornerRefinementMethod->currentIndex() == 3)
+		{
+			// If not apriltag dictionary selected, reset refinement to default.
+			_ui->OpenCVCornerRefinementMethod->setCurrentIndex(Parameters::defaultMarkerOpenCVCornerRefinementMethod());
+		}
+#endif
+#if CV_MAJOR_VERSION < 4 || (CV_MAJOR_VERSION == 4 && CV_MINOR_VERSION <8)
+		// disable aruco MPI dictionary	
+		_ui->MarkerDictionary->setItemData(21, 0, Qt::UserRole - 1);
+		if(_ui->MarkerDictionary->currentIndex() == 21)
+		{
+			_ui->MarkerDictionary->setCurrentIndex(Parameters::defaultMarkerDictionary());
+		}
+#endif
+	}
+}
+
 void PreferencesDialog::updateOdometryStackedIndex(int index)
 {
 	if(index == 11) // FLOAM -> LOAM
@@ -6233,7 +6327,7 @@ bool PreferencesDialog::isMarkerDetection() const
 }
 double PreferencesDialog::getMarkerLength() const
 {
-	return _ui->ArucoMarkerLength->value();
+	return _ui->MarkerLength->value();
 }
 bool PreferencesDialog::isCloudMeshing() const
 {
@@ -7303,13 +7397,14 @@ Camera * PreferencesDialog::createCamera(
 				_ui->source_spinBox_databaseStartId->value(),
 				cameraIndices,
 				_ui->source_spinBox_databaseStopId->value(),
-				!_ui->general_checkBox_createIntermediateNodes->isChecked(),
+				!_ui->source_checkBox_intermediateNodesAreNormalNodes->isChecked() && !_ui->general_checkBox_createIntermediateNodes->isChecked(),
 				_ui->source_checkBox_ignoreLandmarks->isChecked(),
 				_ui->source_checkBox_ignoreFeatures->isChecked(),
 				0,
 				-1,
 				_ui->source_checkBox_ignorePriors->isChecked(),
 				_ui->source_checkBox_ignoreIMU->isChecked(),
+				_ui->source_checkBox_intermediateNodesAreNormalNodes->isChecked(),
 				localTransformOverrides);
 	}
 	else
