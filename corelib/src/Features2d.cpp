@@ -55,6 +55,10 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "python/PyDetector.h"
 #endif
 
+#ifdef RTABMAP_RKNN
+#include "rknn/XFeatRKNN.h"
+#endif
+
 #if CV_MAJOR_VERSION < 3
 #include "opencv/Orb.h"
 #ifdef HAVE_OPENCV_GPU
@@ -696,6 +700,14 @@ Feature2D * Feature2D::create(Feature2D::Type type, const ParametersMap & parame
 	}
 #endif
 
+#ifndef RTABMAP_RKNN
+	if(type == Feature2D::kFeatureXFeatRKNN)
+	{
+		UWARN("XFeat RKNN feature cannot be used as RTAB-Map is not built with the option enabled. GFTT/ORB is used instead.");
+		type = Feature2D::kFeatureGfttOrb;
+	}
+#endif
+
 	Feature2D * feature2D = 0;
 	switch(type)
 	{
@@ -754,6 +766,11 @@ case Feature2D::kFeatureSuperPointRpautrat:
 #ifdef RTABMAP_PYTHON
 	case Feature2D::kFeaturePyDetector:
 		feature2D = new PyDetector(parameters);
+		break;
+#endif
+#ifdef RTABMAP_RKNN
+	case Feature2D::kFeatureXFeatRKNN:
+		feature2D = new XFeatRKNN(parameters);
 		break;
 #endif
 #ifdef RTABMAP_NONFREE

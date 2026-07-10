@@ -348,6 +348,11 @@ class RTABMAP_CORE_EXPORT Parameters
     RTABMAP_PARAM(SuperPoint, NMSRadius,     int,  4,      uFormat("[%s=true] Minimum distance (pixels) between keypoints.", kSuperPointNMS().c_str()));
     RTABMAP_PARAM(SuperPoint, Cuda,          bool, true,   "Use Cuda device for Torch, otherwise CPU device is used by default.");
 
+    RTABMAP_PARAM_STR(XFeatRKNN, ModelPath, "",         "[Required] Path to XFeat RKNN model (*.rknn), exported with static grayscale input and input InstanceNorm removed (normalization is done on CPU).");
+    RTABMAP_PARAM(XFeatRKNN, CoreMask,  int,   7,       "NPU core mask: 0=auto, 1/2/4=core 0/1/2, 3=cores 0+1, 7=all three cores.");
+    RTABMAP_PARAM(XFeatRKNN, TopK,      int,   1000,    "Maximum keypoints decoded from the score map (before the detector's max features limit is applied).");
+    RTABMAP_PARAM(XFeatRKNN, Threshold, float, 0.05,    "Keypoint score threshold (softmax cell probability).");
+
     RTABMAP_PARAM_STR(SuperPointRpautrat, WeightsPath, "",           "[Required] SuperPoint weights file (*.pth).");
     RTABMAP_PARAM_STR(SuperPointRpautrat, ModelPath, "",           "[Required] SuperPoint python model file (superpoint_pytorch.py).");
     RTABMAP_PARAM(SuperPointRpautrat, Threshold,     float, 0.005, "Detector response threshold to accept keypoint.");

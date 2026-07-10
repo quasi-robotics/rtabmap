@@ -131,7 +131,8 @@ public:
 		kFeatureGfttDaisy=13, //new 0.20.6
 		kFeatureSurfDaisy=14,  //new 0.20.6
 		kFeaturePyDetector=15, //new 0.20.8
-		kFeatureSuperPointRpautrat=16}; // new 0.23.3
+		kFeatureSuperPointRpautrat=16, // new 0.23.3
+		kFeatureXFeatRKNN=17}; // quasi fork: XFeat on Rockchip NPU
 
 	static std::string typeName(Type type)
 	{
@@ -168,6 +169,8 @@ public:
 			return "SURF+Daisy";
 		case kFeatureSuperPointRpautrat:
 			return "SUPERPOINT-RPAUTRAT";
+		case kFeatureXFeatRKNN:
+			return "XFEAT-RKNN";
 		default:
 			return "Unknown";
 		}

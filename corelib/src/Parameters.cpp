@@ -172,7 +172,8 @@ bool Parameters::isFeatureParameter(const std::string & parameter)
 			group.compare("KAZE") == 0 ||
 			group.compare("SuperPoint") == 0 ||
 			group.compare("SuperPointRpautrat") == 0 ||
-			group.compare("PyDetector") == 0;
+			group.compare("PyDetector") == 0 ||
+			group.compare("XFeatRKNN") == 0;
 }
 
 rtabmap::ParametersMap Parameters::getDefaultOdometryParameters(bool stereo, bool vis, bool icp)
