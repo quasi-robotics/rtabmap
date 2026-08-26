@@ -180,11 +180,15 @@ Rtabmap::Rtabmap() :
 	_pathGoalIndex(0),
 	_pathTransformToGoal(Transform::getIdentity()),
 	_pathStuckCount(0),
-	_pathStuckDistance(0.0f)
-#ifdef RTABMAP_PYTHON
-	,_python(new PythonInterface())
-#endif
+	_pathStuckDistance(0.0f),
+	_dummyDictionary(false)
 {
+#ifdef RTABMAP_PYTHON
+	// Ensure the embedded Python interpreter is up. The first call here will
+	// assert that it runs on the main thread; callers building Rtabmap on a
+	// worker thread should construct the singleton in main() beforehand.
+	PythonInterface::instance("Rtabmap");
+#endif
 }
 
 Rtabmap::~Rtabmap() {
@@ -302,7 +306,7 @@ void Rtabmap::flushStatisticLogs()
 {
 	if(_foutFloat && _bufferedLogsF.size())
 	{
-		UDEBUG("_bufferedLogsF.size=%d", _bufferedLogsF.size());
+		UDEBUG("_bufferedLogsF.size=%d", (int)_bufferedLogsF.size());
 		for(std::list<std::string>::iterator iter = _bufferedLogsF.begin(); iter!=_bufferedLogsF.end(); ++iter)
 		{
 			fprintf(_foutFloat, "%s", iter->c_str());
@@ -311,7 +315,7 @@ void Rtabmap::flushStatisticLogs()
 	}
 	if(_foutInt && _bufferedLogsI.size())
 	{
-		UDEBUG("_bufferedLogsI.size=%d", _bufferedLogsI.size());
+		UDEBUG("_bufferedLogsI.size=%d", (int)_bufferedLogsI.size());
 		for(std::list<std::string>::iterator iter = _bufferedLogsI.begin(); iter!=_bufferedLogsI.end(); ++iter)
 		{
 			fprintf(_foutInt, "%s", iter->c_str());
@@ -360,6 +364,10 @@ void Rtabmap::init(const ParametersMap & parameters, const std::string & databas
 	if(!_memory)
 	{
 		_memory = new Memory(allParameters);
+		if(_dummyDictionary)
+		{
+			_memory->setDummyDictionary(true);
+		}
 		_memory->init(_databasePath, false, allParameters, true);
 	}
 
@@ -395,7 +403,7 @@ void Rtabmap::init(const ParametersMap & parameters, const std::string & databas
 			_lastLocalizationPose = lastPose;
 
 			UINFO("Loaded optimizedPoses=%d firstPose %d=%s lastLocalizationPose=%s",
-					_optimizedPoses.size(),
+					(int)_optimizedPoses.size(),
 					_optimizedPoses.lower_bound(1)->first,
 					_optimizedPoses.lower_bound(1)->second.prettyPrint().c_str(),
 					_lastLocalizationPose.prettyPrint().c_str());
@@ -1250,7 +1258,6 @@ bool Rtabmap::process(
 	std::map<int, float> adjustedLikelihood;
 	std::map<int, float> likelihood;
 	std::map<int, int> weights;
-	std::map<int, float> posterior;
 	std::list<std::pair<int, float> > reactivateHypotheses;
 
 	std::map<int, int> childCount;
@@ -1312,7 +1319,7 @@ bool Rtabmap::process(
 						odomPose.r21(), odomPose.r22(), odomPose.r23(), odomPose.o24(),
 						odomPose.r31(), odomPose.r32(), odomPose.r33(), odomPose.o34());
 				odomPose.normalizeRotation();
-				UASSERT_MSG(odomPose.isInvertible(), uFormat("Odometry pose is not invertible!\n"
+				UASSERT_MSG(odomPose.isInvertible(), uFormat("Odometry pose is not invertible! %s\n"
 						"[%f %f %f %f;\n"
 						" %f %f %f %f;\n"
 						" %f %f %f %f;\n"
@@ -2130,7 +2137,7 @@ bool Rtabmap::process(
 			ULOGGER_INFO("getting posterior...");
 
 			// Compute the posterior
-			posterior = _bayesFilter->computePosterior(_memory, likelihood);
+			_bayesFilter->computePosterior(_memory, likelihood);
 			timePosteriorCalculation = timer.ticks();
 			ULOGGER_INFO("timePosteriorCalculation=%fs",timePosteriorCalculation);
 
@@ -2144,17 +2151,20 @@ bool Rtabmap::process(
 			// Select the highest hypothesis
 			//============================================================
 			ULOGGER_INFO("creating hypotheses...");
-			if(posterior.size())
+			const std::vector<int> & posteriorIds = _bayesFilter->getPosteriorIds();
+			const std::vector<float> & posteriorValues = _bayesFilter->getPosteriorValues();
+			if(posteriorIds.size())
 			{
-				for(std::map<int, float>::const_reverse_iterator iter = posterior.rbegin(); iter != posterior.rend(); ++iter)
+				// Highest id first, so the highest id wins on equal probabilities.
+				for(size_t i=posteriorIds.size(); i-- > 0;)
 				{
-					if(iter->first > 0 && iter->second > _highestHypothesis.second)
+					if(posteriorIds[i] > 0 && posteriorValues[i] > _highestHypothesis.second)
 					{
-						_highestHypothesis = *iter;
+						_highestHypothesis = std::make_pair(posteriorIds[i], posteriorValues[i]);
 					}
 				}
 				// With the virtual place, use sum of LC probabilities (1 - virtual place hypothesis).
-				_highestHypothesis.second = 1-posterior.begin()->second;
+				_highestHypothesis.second = 1-posteriorValues[0];
 			}
 			timeHypothesesCreation = timer.ticks();
 			ULOGGER_INFO("Highest hypothesis=%d, value=%f, timeHypothesesCreation=%fs", _highestHypothesis.first, _highestHypothesis.second, timeHypothesesCreation);
@@ -2185,7 +2195,7 @@ bool Rtabmap::process(
 				if(_highestHypothesis.second >= loopThr)
 				{
 					rejectedLoopClosure = true;
-					if(posterior.size() <= 2 && loopThr>0.0f)
+					if(_bayesFilter->getPosteriorIds().size() <= 2 && loopThr>0.0f)
 					{
 						// Ignore loop closure if there is only one loop closure hypothesis
 						UDEBUG("rejected hypothesis: single hypothesis");
@@ -2394,7 +2404,7 @@ bool Rtabmap::process(
 					"nbDirectNeighborsInDb=%d, "
 					"time=%fs (%fs %fs)",
 					neighborhoodSize,
-					reactivatedIds.size(),
+					(int)reactivatedIds.size(),
 					(int)nbLoadedFromDb,
 					nbDirectNeighborsInDb,
 					timeGetN.ticks(),
@@ -4186,7 +4196,9 @@ bool Rtabmap::process(
 	}
 
 	// Posterior is empty if a bad signature is detected
-	float vpHypothesis = posterior.size()?posterior.at(Memory::kIdVirtual):0.0f;
+	// The virtual place is the first location of the posterior when it is one of them.
+	const std::vector<int> & vpIds = _bayesFilter->getPosteriorIds();
+	float vpHypothesis = (vpIds.size() && vpIds[0]==Memory::kIdVirtual)?_bayesFilter->getPosteriorValues()[0]:0.0f;
 	int loopId = _loopClosureHypothesis.first>0?_loopClosureHypothesis.first:lastProximitySpaceClosureId;
 
 	// prepare statistics
@@ -4403,6 +4415,13 @@ bool Rtabmap::process(
 				statistics_.setWeights(weights);
 				if(_publishPdf)
 				{
+					const std::vector<int> & ids = _bayesFilter->getPosteriorIds();
+					const std::vector<float> & values = _bayesFilter->getPosteriorValues();
+					std::map<int, float> posterior;
+					for(size_t i=0; i<ids.size(); ++i)
+					{
+						posterior.insert(posterior.end(), std::make_pair(ids[i], values[i]));
+					}
 					statistics_.setPosterior(posterior);
 				}
 				if(_publishLikelihood)
@@ -4434,8 +4453,13 @@ bool Rtabmap::process(
 	}
 	if(!_publishLastSignatureData)
 	{
+		// Keep the occupancy grid (compressed AND raw) on the published copy:
+		// downstream consumers rely on it to generate global occupancy grid
+		// in the same process (e.g. the raw occupancy grid used by the MainWindow 
+		// or ROS rtabmap_slam) or on an external process (the compressed occupancy
+		// grid published over ROS rtabmap_msgs/MapData).
 		lastSignatureData.sensorData().clearCompressedData(true, true, true, false);
-		lastSignatureData.sensorData().clearRawData();
+		lastSignatureData.sensorData().clearRawData(true, true, true, false);
 	}
 	if(!_rawDataKept)
 	{
@@ -4568,7 +4592,7 @@ bool Rtabmap::process(
 			if(_maxMemoryAllowed != 0 && workingMemSize > _maxMemoryAllowed)
 			{
 				ULOGGER_INFO("Removing old signatures because memory limit is reached %d > %d...",
-					workingMemSize, _maxMemoryAllowed);
+					(int)workingMemSize, _maxMemoryAllowed);
 			}
 			immunizedLocations.insert(_lastLocalizationNodeId); // keep the latest localization in working memory
 			std::list<int> transferred = _memory->forget(immunizedLocations);
@@ -5014,7 +5038,14 @@ void Rtabmap::setMemoryThreshold(int maxMemoryAllowed)
 
 void Rtabmap::setWorkingDirectory(std::string path)
 {
-	path = uReplaceChar(path, '~', UDirectory::homeDir());
+	// Expand leading "~" to the user's home directory (shell convention).
+	// We do NOT replace every "~" in the path -- Windows 8.3 short names
+	// embed "~" in the middle (e.g. C:\Users\RUNNER~1\...), and a blanket
+	// uReplaceChar would corrupt those.
+	if(!path.empty() && path[0] == '~')
+	{
+		path = UDirectory::homeDir() + path.substr(1);
+	}
 	if(!path.empty() && UDirectory::exists(path))
 	{
 		ULOGGER_DEBUG("Comparing new working directory path \"%s\" with \"%s\"", path.c_str(), _wDir.c_str());
@@ -5690,7 +5721,7 @@ std::list<std::pair<int, int> > Rtabmap::repairGraph(
 
 void Rtabmap::adjustLikelihood(std::map<int, float> & likelihood) const
 {
-	ULOGGER_DEBUG("likelihood.size()=%d", likelihood.size());
+	ULOGGER_DEBUG("likelihood.size()=%d", (int)likelihood.size());
 	UTimer timer;
 	timer.start();
 	if(likelihood.size()==0)
@@ -5709,7 +5740,7 @@ void Rtabmap::adjustLikelihood(std::map<int, float> & likelihood) const
 			values.push_back(iter->second);
 		}
 	}
-	UDEBUG("values.size=%d", values.size());
+	UDEBUG("values.size=%d", (int)values.size());
 
 	float mean = uMean(values);
 	float stdDev = std::sqrt(uVariance(values, mean));
@@ -6330,11 +6361,11 @@ int Rtabmap::detectMoreLoopClosures(
 									links.insert(std::make_pair(from, Link(from, to, Link::kUserClosure, t, inf)));
 									loopClosuresAdded.push_back(Link(from, to, Link::kUserClosure, t, inf));
 									std::string msg = uFormat("Iteration %d/%d: Added loop closure %d->%d! (%d/%d)", n+1, iterations, from, to, i+1, (int)clusters.size());
-									UINFO(msg.c_str());
+									UINFO("%s", msg.c_str());
 
 									if(processState)
 									{
-										UINFO(msg.c_str());
+										UINFO("%s", msg.c_str());
 										if(!processState->callback(msg))
 										{
 											return -1;
@@ -6351,7 +6382,7 @@ int Rtabmap::detectMoreLoopClosures(
 		if(processState)
 		{
 			std::string msg = uFormat("Iteration %d/%d: Detected %d total loop closures!", n+1, iterations, (int)addedLinks.size()/2);
-			UINFO(msg.c_str());
+			UINFO("%s", msg.c_str());
 			if(!processState->callback(msg))
 			{
 				return -1;
@@ -6414,17 +6445,17 @@ bool Rtabmap::globalBundleAdjustment(
 	if(!_optimizedPoses.empty() && !_constraints.empty())
 	{
 		int iterations = Parameters::defaultOptimizerIterations();
-		float pixelVariance = Parameters::defaultg2oPixelVariance();
+		float pixelVariance = Parameters::defaultOptimizerPixelVariance();
 		ParametersMap params = _parameters;
 		Parameters::parse(params, Parameters::kOptimizerIterations(), iterations);
-		Parameters::parse(params, Parameters::kg2oPixelVariance(), pixelVariance);
+		Parameters::parse(params, Parameters::kOptimizerPixelVariance(), pixelVariance);
 		if(iterations > 0)
 		{
 			uInsert(params, ParametersPair(Parameters::kOptimizerIterations(), uNumber2Str(iterations)));
 		}
 		if(pixelVariance > 0.0f)
 		{
-			uInsert(params, ParametersPair(Parameters::kg2oPixelVariance(), uNumber2Str(pixelVariance)));
+			uInsert(params, ParametersPair(Parameters::kOptimizerPixelVariance(), uNumber2Str(pixelVariance)));
 		}
 
 		std::map<int, Signature> signatures;
@@ -6934,6 +6965,18 @@ void Rtabmap::addNodesToRepublish(const std::vector<int> & ids)
 	}
 }
 
+void Rtabmap::setDummyDictionary(bool enabled)
+{
+	if(_memory && enabled) {
+		UERROR("Memory is already initialized, cannot set dummy dictionary. This "
+			"function can only be called after Rtabmap object is created, but "
+			"before init() is called.");
+	}
+	else {
+		_dummyDictionary = enabled;
+	}
+}
+
 void Rtabmap::clearPath(int status)
 {
 	UINFO("status=%d", status);
@@ -7024,6 +7067,33 @@ bool Rtabmap::computePath(int targetNode, bool global)
 			{
 				if(iter->first > 0)
 				{
+					// Skip intermediate nodes (weight==-1). They are not navigable
+					// waypoints and updateGoalIndex would otherwise abort the
+					// plan when it sees them. The poses of the remaining real
+					// nodes already account for cumulative transform through any
+					// intermediate chain (relative poses from graph::computePath).
+					int weight = 0;
+					const Signature * s = _memory->getSignature(iter->first);
+					if(s)
+					{
+						weight = s->getWeight();
+					}
+					else
+					{
+						// For nodes in LTM, fetch weight from the database.
+						Transform p, gt;
+						int mapId = 0;
+						std::string label;
+						double stamp = 0.0;
+						std::vector<float> vel;
+						GPS gps;
+						EnvSensors envs;
+						_memory->getNodeInfo(iter->first, p, mapId, weight, label, stamp, gt, vel, gps, envs, true);
+					}
+					if(weight == -1)
+					{
+						continue;
+					}
 					// just keep nodes in the path
 					_path[oi].first = iter->first;
 					_path[oi++].second = t * iter->second;
@@ -7297,17 +7367,13 @@ void Rtabmap::updateGoalIndex()
 	if( _memory && _path.size())
 	{
 		// remove all previous virtual links
-		bool hasIntermediateNodes = false;
 		for(unsigned int i=0; i<_pathCurrentIndex && i<_path.size(); ++i)
 		{
 			const Signature * s = _memory->getSignature(_path[i].first);
 			if(s)
 			{
+				UASSERT_MSG(s->getWeight() != -1, uFormat("path[%u] id=%d is intermediate; computePath should have filtered it", i, _path[i].first).c_str());
 				_memory->removeVirtualLinks(s->id());
-			}
-			if(s->getWeight() == -1)
-			{
-				hasIntermediateNodes = true;
 			}
 		}
 
@@ -7334,51 +7400,42 @@ void Rtabmap::updateGoalIndex()
 			}
 		}
 
-		// Make sure the next signatures on the path are linked together
+		// Make sure the next signatures on the path are linked together.
+		// Intermediate nodes have been filtered out of _path by computePath, so
+		// every entry is a real node here.
 		float distanceSoFar = 0.0f;
-		for(unsigned int i=_pathCurrentIndex+1;
-			i<_path.size() && !hasIntermediateNodes;
-			++i)
+		for(unsigned int i=_pathCurrentIndex+1; i<_path.size(); ++i)
 		{
-			if(i>0)
+			if(_localRadius > 0.0f)
 			{
-				if(_localRadius > 0.0f)
+				distanceSoFar += _path[i-1].second.getDistance(_path[i].second);
+			}
+
+			if(_path[i].first != _path[i-1].first)
+			{
+				const Signature * s = _memory->getSignature(_path[i].first);
+				if(s)
 				{
-					distanceSoFar += _path[i-1].second.getDistance(_path[i].second);
-				}
-				
-				if(_path[i].first != _path[i-1].first)
-				{
-					const Signature * s = _memory->getSignature(_path[i].first);
-					if(s)
+					UASSERT_MSG(s->getWeight() != -1, uFormat("path[%u] id=%d is intermediate; computePath should have filtered it", i, _path[i].first).c_str());
+					const Signature * sPrev = _memory->getSignature(_path[i-1].first);
+					if(sPrev)
 					{
-						if(s->getWeight() == -1)
-						{
-							hasIntermediateNodes = true;
-							break;
-						}
-						if(!s->hasLink(_path[i-1].first) && _memory->getSignature(_path[i-1].first) != 0)
-						{
-							Transform virtualLoop = _path[i].second.inverse() * _path[i-1].second;
-							_memory->addLink(Link(_path[i].first, _path[i-1].first, Link::kVirtualClosure, virtualLoop, cv::Mat::eye(6,6,CV_64FC1)*0.01)); // on the optimized path
-							UINFO("Added Virtual link between %d and %d", _path[i-1].first, _path[i].first);
-						}
+						UASSERT_MSG(sPrev->getWeight() != -1, uFormat("path[%u] id=%d is intermediate; computePath should have filtered it", i-1, _path[i-1].first).c_str());
+					}
+					if(!s->hasLink(_path[i-1].first) && sPrev != 0)
+					{
+						Transform virtualLoop = _path[i].second.inverse() * _path[i-1].second;
+						_memory->addLink(Link(_path[i].first, _path[i-1].first, Link::kVirtualClosure, virtualLoop, cv::Mat::eye(6,6,CV_64FC1)*0.01)); // on the optimized path
+						UINFO("Added Virtual link between %d and %d", _path[i-1].first, _path[i].first);
 					}
 				}
-
-				if(distanceSoFar > _localRadius)
-				{
-					UDEBUG("Farthest goal=%d : %f m", _path[i].first, distanceSoFar);
-					break;
-				}
 			}
-		}
 
-		if(hasIntermediateNodes)
-		{
-			UERROR("Cannot follow a path with a map containing intermediate nodes (not supported: don't use intermediate nodes if rtabmap's planner has to be used). Aborting current plan!");
-			this->clearPath(-1);
-			return;
+			if(distanceSoFar > _localRadius)
+			{
+				UDEBUG("Farthest goal=%d : %f m", _path[i].first, distanceSoFar);
+				break;
+			}
 		}
 
 		UDEBUG("current node = %d current goal = %d", _path[_pathCurrentIndex].first, _path[_pathGoalIndex].first);

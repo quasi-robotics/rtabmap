@@ -61,6 +61,9 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <QMainWindow>
 #include <QProgressDialog>
 #include <QApplication>
+#include <QEventLoop>
+#include <QElapsedTimer>
+#include <QtGui/QWindow>
 #include <QLabel>
 #include <functional>
 #include <QScrollBar>
@@ -70,6 +73,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <QtGui/QCloseEvent>
 
 #include "ui_preferencesDialog.h"
+#include "GuiUtil.h"
 
 #include "rtabmap/core/Version.h"
 #include "rtabmap/core/Parameters.h"
@@ -148,11 +152,11 @@ PreferencesDialog::PreferencesDialog(QWidget * parent) :
 	bool haveCuda = false;
 #if CV_MAJOR_VERSION < 3
 #ifdef HAVE_OPENCV_GPU
-	haveCuda = cv::gpu::getCudaEnabledDeviceCount() != 0;
+	haveCuda = cv::gpu::getCudaEnabledDeviceCount() > 0;
 #endif
 #else
 #ifdef HAVE_OPENCV_CUDAFEATURES2D
-	haveCuda = cv::cuda::getCudaEnabledDeviceCount() != 0;
+	haveCuda = cv::cuda::getCudaEnabledDeviceCount() > 0;
 #endif
 #endif
 	if(!haveCuda)
@@ -506,10 +510,10 @@ PreferencesDialog::PreferencesDialog(QWidget * parent) :
 	_ui->checkBox_showOdomFrustums->setChecked(false);
 #endif
 
-#if !defined(HAVE_OPENCV_ARUCO) && !defined(RTABMAP_APRILTAG)
+#if !((CV_MAJOR_VERSION > 4 || (CV_MAJOR_VERSION==4 && CV_MINOR_VERSION >=7)) && defined(HAVE_OPENCV_OBJDETECT)) && !defined(HAVE_OPENCV_ARUCO) && !defined(RTABMAP_APRILTAG)
 	_ui->label_markerDetection->setText(_ui->label_markerDetection->text()+" This option works only if OpenCV has been built with \"aruco\" module and/or RTAB-Map has been built with AprilTag library support.");
 #endif
-#ifndef HAVE_OPENCV_ARUCO
+#if !(((CV_MAJOR_VERSION > 4 || (CV_MAJOR_VERSION==4 && CV_MINOR_VERSION >=7)) && defined(HAVE_OPENCV_OBJDETECT)) || defined(HAVE_OPENCV_ARUCO))
 	_ui->MarkerStrategy->setItemData(0, 0, Qt::UserRole - 1);
 #endif
 #ifndef RTABMAP_APRILTAG
@@ -1128,6 +1132,7 @@ PreferencesDialog::PreferencesDialog(QWidget * parent) :
 	_ui->general_doubleSpinBox_vp->setObjectName(Parameters::kBayesVirtualPlacePriorThr().c_str());
 	_ui->lineEdit_bayes_predictionLC->setObjectName(Parameters::kBayesPredictionLC().c_str());
 	_ui->checkBox_bayes_fullPredictionUpdate->setObjectName(Parameters::kBayesFullPredictionUpdate().c_str());
+	_ui->checkBox_bayes_sparsePrediction->setObjectName(Parameters::kBayesSparsePrediction().c_str());
 	connect(_ui->lineEdit_bayes_predictionLC, SIGNAL(textChanged(const QString &)), this, SLOT(updatePredictionPlot()));
 
 	//Keypoint-based
@@ -1313,9 +1318,10 @@ PreferencesDialog::PreferencesDialog(QWidget * parent) :
 
 	_ui->comboBox_g2o_solver->setObjectName(Parameters::kg2oSolver().c_str());
 	_ui->comboBox_g2o_optimizer->setObjectName(Parameters::kg2oOptimizer().c_str());
-	_ui->doubleSpinBox_g2o_pixelVariance->setObjectName(Parameters::kg2oPixelVariance().c_str());
-	_ui->doubleSpinBox_g2o_robustKernelDelta->setObjectName(Parameters::kg2oRobustKernelDelta().c_str());
-	_ui->doubleSpinBox_g2o_baseline->setObjectName(Parameters::kg2oBaseline().c_str());
+	_ui->doubleSpinBox_g2o_pixelVariance->setObjectName(Parameters::kOptimizerPixelVariance().c_str());
+	_ui->doubleSpinBox_optimizer_disparityVariance->setObjectName(Parameters::kOptimizerDisparityVariance().c_str());
+	_ui->doubleSpinBox_g2o_robustKernelDelta->setObjectName(Parameters::kOptimizerRobustKernelDelta().c_str());
+	_ui->doubleSpinBox_g2o_baseline->setObjectName(Parameters::kOptimizerBaseline().c_str());
 
 	_ui->comboBox_gtsam_optimizer->setObjectName(Parameters::kGTSAMOptimizer().c_str());
 	_ui->gtsam_incremental->setObjectName(Parameters::kGTSAMIncremental().c_str());
@@ -1425,6 +1431,7 @@ PreferencesDialog::PreferencesDialog(QWidget * parent) :
 	_ui->loopClosure_icpPointToPlaneNormalsRadius->setObjectName(Parameters::kIcpPointToPlaneRadius().c_str());
 	_ui->loopClosure_icpPointToPlaneGroundNormalsUp->setObjectName(Parameters::kIcpPointToPlaneGroundNormalsUp().c_str());
 	_ui->loopClosure_icpPointToPlaneNormalsMinComplexity->setObjectName(Parameters::kIcpPointToPlaneMinComplexity().c_str());
+	_ui->loopClosure_icpPointToPlaneComplexityCentered->setObjectName(Parameters::kIcpPointToPlaneComplexityCentered().c_str());
 	_ui->loopClosure_icpPointToPlaneLowComplexityStrategy->setObjectName(Parameters::kIcpPointToPlaneLowComplexityStrategy().c_str());
 	_ui->loopClosure_icpDebugExportFormat->setObjectName(Parameters::kIcpDebugExportFormat().c_str());
 
@@ -2639,19 +2646,19 @@ void PreferencesDialog::restoreConfigOwnership(const QString & filePath)
 			gid_t gid = (gid_t)atoi(sudoGid);
 			// Restore the config file and its containing directory so the user
 			// can still write preferences without sudo afterwards.
-			if(!filePath.isEmpty() && QFile::exists(filePath))
+			auto restoreOwnership = [uid, gid](const QString & path)
 			{
-				if(chown(filePath.toStdString().c_str(), uid, gid) != 0)
+				if(!path.isEmpty() && QFile::exists(path))
 				{
-					UWARN("Could not restore ownership of \"%s\" to uid=%d (%s).",
-							filePath.toStdString().c_str(), (int)uid, strerror(errno));
+					if(chown(path.toStdString().c_str(), uid, gid) != 0)
+					{
+						UWARN("Could not restore ownership of \"%s\" to uid=%d (%s).",
+								path.toStdString().c_str(), (int)uid, strerror(errno));
+					}
 				}
-			}
-			QString dir = QFileInfo(filePath).absolutePath();
-			if(!dir.isEmpty())
-			{
-				chown(dir.toStdString().c_str(), uid, gid);
-			}
+			};
+			restoreOwnership(filePath);
+			restoreOwnership(QFileInfo(filePath).absolutePath());
 		}
 	}
 #else
@@ -5595,7 +5602,11 @@ void PreferencesDialog::updatePredictionPlot()
 	QVector<qreal> dataX((values.size()-2)*2 + 1);
 	QVector<qreal> dataY((values.size()-2)*2 + 1);
 	double value;
-	double sum = 0;
+	// Summed as PredictionModel does it, into a float: that is the sum the filter decides on,
+	// and under 1 of it is what has normalize() spread the difference over every other
+	// location. A double would land a few 1e-8 from a float on a list like the default one,
+	// and say 1 where the filter says otherwise.
+	float sum = 0.0f;
 	int lvl = 1;
 	bool ok = false;
 	bool error = false;
@@ -5633,7 +5644,7 @@ void PreferencesDialog::updatePredictionPlot()
 	{
 		_ui->label_prediction_sum->setText(QString("<font color=#FF0000>") + _ui->label_prediction_sum->text() + "</font>");
 	}
-	else if(sum == 1.0)
+	else if(sum == 1.0f)
 	{
 		_ui->label_prediction_sum->setText(QString("<font color=#00FF00>") + _ui->label_prediction_sum->text() + "</font>");
 	}
@@ -7846,9 +7857,7 @@ void PreferencesDialog::testOdometry()
 	progress.setCancelButton(0);
 	progress.setMinimumDuration(0);
 	progress.setValue(0);
-	progress.show();
-	QApplication::processEvents();
-	QApplication::processEvents(); // make sure it is drawn
+	showAndWaitExposed(&progress);
 
 	Camera * camera = this->createCamera();
 	progress.hide();
@@ -7989,9 +7998,7 @@ void PreferencesDialog::testOdometry()
 	// at function scope end (not in join()), so 'progress' stays visible across it. On Windows
 	// the first 2-3 RealSense closes per launch stall ~20s in the Motion Module stop().
 	progress.setLabelText(tr("Closing camera..."));
-	progress.show();
-	QApplication::processEvents();
-	QApplication::processEvents(); // make sure it is drawn
+	showAndWaitExposed(&progress);
 	cameraThread.join(true);
 	odomThread.join(true);
 
@@ -8033,9 +8040,7 @@ void PreferencesDialog::testCamera()
 	progress.setCancelButton(0);
 	progress.setMinimumDuration(0);
 	progress.setValue(0);
-	progress.show();
-	QApplication::processEvents();
-	QApplication::processEvents(); // make sure it is drawn
+	showAndWaitExposed(&progress);
 
 	// createCamera() init()s the device on the GUI thread (required by ZED) and takes a few seconds.
 	Camera * camera = this->createCamera();
@@ -8092,9 +8097,7 @@ void PreferencesDialog::testCamera()
 		// stays visible across it. On Windows the first 2-3 RealSense closes per launch stall
 		// ~20s in the Motion Module stop() (librealsense warm-up); this keeps the user informed.
 		progress.setLabelText(tr("Closing camera..."));
-		progress.show();
-		QApplication::processEvents();
-		QApplication::processEvents(); // make sure it is drawn
+		showAndWaitExposed(&progress);
 		cameraThread.join(true); // cameraThread's destructor (scope end) closes the device
 		// deleteLater() (not delete): defer destruction to the event loop so Qt finishes
 		// tearing down the OpenGL widget's context and window-proc subclass and drains
@@ -8582,9 +8585,7 @@ void PreferencesDialog::testLidar()
 	progress.setCancelButton(0);
 	progress.setMinimumDuration(0);
 	progress.setValue(0);
-	progress.show();
-	QApplication::processEvents();
-	QApplication::processEvents(); // make sure it is drawn
+	showAndWaitExposed(&progress);
 
 	Lidar * lidar = this->createLidar();
 	progress.hide();
@@ -8613,9 +8614,7 @@ void PreferencesDialog::testLidar()
 		// destructor at scope end (not in join()), so 'progress' - declared in the outer
 		// scope - stays visible across it.
 		progress.setLabelText(tr("Closing sensor..."));
-		progress.show();
-		QApplication::processEvents();
-		QApplication::processEvents(); // make sure it is drawn
+		showAndWaitExposed(&progress);
 		lidarThread.join(true); // lidarThread's destructor (scope end) closes the device
 		// deleteLater() (not delete): see testCamera() - avoids a dangling OpenGL platform
 		// window that crashes in QWindowsWindow::alertWindow when Preferences later closes.

@@ -57,6 +57,7 @@ class RTABMAP_GUI_EXPORT GraphViewer : public QGraphicsView {
 
 public:
 	enum ViewPlane {XY, XZ, YZ};
+	enum InteractionMode {HandMode, SelectionMode};
 
 public:
 	GraphViewer(QWidget * parent = 0);
@@ -172,14 +173,21 @@ public:
 	void setOdomCacheOverlayVisible(bool visible);
 	void setOrientationENU(bool enabled);
 	void setViewPlane(ViewPlane plane);
+	void setInteractionMode(InteractionMode mode);
+	InteractionMode getInteractionMode() const {return _interactionMode;}
+	std::set<int> getSelectedNodeIds();
+	void selectNodesFromIds(const std::set<int> & ids);
 	void setEnsureFrameVisible(bool visible);
 	void setFastZoomMinNodes(int value);
+	QPointF getNodeScenePosition(int id) const;
+	void centerOnNode(int id);
 
 Q_SIGNALS:
 	void configChanged();
 	void mapShownRequested();
 	void nodeSelected(int);
 	void linkSelected(int, int);
+	void nodesSelected(); // Nodes selected by rubber band, call getSelectedNodeIds() to get ids selected
 
 public Q_SLOTS:
 	void restoreDefaults();
@@ -253,6 +261,7 @@ private:
 	bool _orientationENU;
 	bool _mouseTracking;
 	ViewPlane _viewPlane;
+	InteractionMode _interactionMode;
 	bool _ensureFrameVisible;
 	QPoint _previousMousePos;
 	QPoint _initialMousePos;
