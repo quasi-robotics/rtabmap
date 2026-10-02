@@ -2844,6 +2844,144 @@ TEST_F(MemoryFixture, CreateSignatureAutoIncrementsIdWhenGenerateIdsOn)
 	EXPECT_EQ(memory_->getLastSignatureId(), id1 + 1);
 }
 
+namespace {
+
+// Mem/ImagePreDecimation with keypoints provided by odometry: createSignature scales them
+// into the decimated image it describes them in, and back to the final image size after.
+// These parameters and this frame are what the four tests below vary the surroundings of.
+ParametersMap decimatedOctaveParams()
+{
+	ParametersMap params = defaultMemoryParams();
+	params[Parameters::kKpMaxFeatures()] = "100";                  // let descriptors be extracted
+	params[Parameters::kMemUseOdomFeatures()] = "true";
+	params[Parameters::kMemImagePreDecimation()] = "2";
+	params[Parameters::kMemImagePostDecimation()] = "1";
+	params[Parameters::kRtabmapImagesAlreadyRectified()] = "true"; // skip rectification
+	return params;
+}
+
+// One keypoint at @p octave, with its 3D point but no descriptor -- the missing descriptor
+// is what sends createSignature down the branch that describes provided keypoints from the
+// image. The image is big enough that the keypoint stays far from the border of the
+// decimated one, where a descriptor cannot be computed and the keypoint would be dropped.
+SensorData decimatedOctaveFrame(int octave)
+{
+	cv::Mat image(256, 256, CV_8UC1);
+	cv::RNG rng(7);
+	rng.fill(image, cv::RNG::UNIFORM, 0, 255);
+	const CameraModel model(100.0, 100.0, 128.0, 128.0,
+			CameraModel::opticalRotation(), 0.0, cv::Size(256, 256));
+
+	SensorData data;
+	data.setRGBDImage(image, cv::Mat(), std::vector<CameraModel>{model});
+	data.setId(0);
+
+	cv::KeyPoint kpt(128.0f, 120.0f, 8.0f);
+	kpt.octave = octave;
+	data.setFeatures(std::vector<cv::KeyPoint>(1, kpt),
+			std::vector<cv::Point3f>(1, cv::Point3f(0.0f, 0.0f, 1.0f)),
+			cv::Mat());
+	return data;
+}
+
+const cv::KeyPoint & theOnlyWord(const Memory & memory)
+{
+	const Signature * s = memory.getSignature(memory.getLastSignatureId());
+	UASSERT(s != 0 && s->getWordsKpts().size() == 1);
+	return s->getWordsKpts()[0];
+}
+
+} // namespace
+
+TEST(MemoryTest, PreDecimationGivesBackProvidedKeypointsAsTheyCameIn)
+{
+	// With no post-decimation the two conversions undo each other, which is the whole of
+	// what this test knows: what comes out is what went in, the octave included -- it
+	// moves down with the image and back up again, a decimated image being that many
+	// pyramid levels down already.
+	Memory memory(decimatedOctaveParams());
+	const SensorData sent = decimatedOctaveFrame(2);
+	SensorData data = sent;
+
+	ASSERT_TRUE(memory.update(data, Transform(0, 0, 0, 0, 0, 0),
+			cv::Mat::eye(6, 6, CV_64FC1) * 0.01));
+	const cv::KeyPoint & word = theOnlyWord(memory);
+	EXPECT_FLOAT_EQ(word.pt.x, sent.keypoints()[0].pt.x);
+	EXPECT_FLOAT_EQ(word.pt.y, sent.keypoints()[0].pt.y);
+	EXPECT_FLOAT_EQ(word.size, sent.keypoints()[0].size);
+	EXPECT_EQ(word.octave, sent.keypoints()[0].octave);
+}
+
+TEST(MemoryTest, PreDecimationKeepsProvidedKeypointsAtTheFinestLevelAvailable)
+{
+	// The same for a keypoint found at the finest level there is. Scaling it into a
+	// decimated image would put it below level 0, which does not exist -- the detail it
+	// was found at was decimated away -- and which ORB rejects outright rather than
+	// describing. It stays at 0 instead, and so cannot come back at 0: the level it would
+	// need to return to is the one that was lost.
+	Memory memory(decimatedOctaveParams());
+	const SensorData sent = decimatedOctaveFrame(0);
+	SensorData data = sent;
+
+	ASSERT_TRUE(memory.update(data, Transform(0, 0, 0, 0, 0, 0),
+			cv::Mat::eye(6, 6, CV_64FC1) * 0.01));
+	const cv::KeyPoint & word = theOnlyWord(memory);
+	// Where it is and how big it is are unaffected, those having room to scale.
+	EXPECT_FLOAT_EQ(word.pt.x, sent.keypoints()[0].pt.x);
+	EXPECT_FLOAT_EQ(word.pt.y, sent.keypoints()[0].pt.y);
+	EXPECT_FLOAT_EQ(word.size, sent.keypoints()[0].size);
+	EXPECT_GE(word.octave, 0);
+}
+
+TEST(MemoryTest, PreDecimationOnANewDatabaseUsesTheCorrectedOctaveScaling)
+{
+	// A database this version created is filled the corrected way. Worth its own test
+	// because the choice is made from the database's version string: were that to come
+	// back empty or unreadable, every map would silently be treated as an old one.
+	const std::string dbPath = uniqueDbPath();
+	Memory memory(decimatedOctaveParams());
+	ASSERT_TRUE(memory.init(dbPath, true));
+
+	SensorData data = decimatedOctaveFrame(2);
+	ASSERT_TRUE(memory.update(data, Transform(0, 0, 0, 0, 0, 0),
+			cv::Mat::eye(6, 6, CV_64FC1) * 0.01));
+	EXPECT_EQ(theOnlyWord(memory).octave, 2);
+
+	memory.close(false);
+	UFile::erase(dbPath);
+}
+
+TEST(MemoryTest, PreDecimationOnAnOlderDatabaseKeepsTheScalingItWasFilledWith)
+{
+	// A map made before 0.23.12 holds features described one pyramid level too coarse.
+	// Adding to it keeps doing that, so that what goes in now can still be matched
+	// against what is already there; the corrected scaling starts with a new map. Here
+	// the octave comes back at 2+1+1 rather than 2-1+1.
+	const std::string source =
+			std::string(RTABMAP_TEST_DATA_ROOT) + "/tests/pr2_scan2d_corridor_50s.db";
+	if(!UFile::exists(source))
+	{
+		GTEST_SKIP() << "Test data not found: " << source
+				<< " (run scripts/fetch_test_data.sh to populate)";
+	}
+	const std::string dbPath = uniqueDbPath();
+	UFile::copy(source, dbPath);
+
+	Memory memory(decimatedOctaveParams());
+	ASSERT_TRUE(memory.init(dbPath));
+	ASSERT_LT(uStrNumCmp(memory.getDatabaseVersion(), "0.23.12"), 0)
+			<< "this fixture is supposed to predate the correction";
+
+	SensorData data = decimatedOctaveFrame(2);
+	ASSERT_TRUE(memory.update(data, Transform(0, 0, 0, 0, 0, 0),
+			cv::Mat::eye(6, 6, CV_64FC1) * 0.01));
+	EXPECT_EQ(theOnlyWord(memory).octave, 4)
+			<< "an older map has to keep being filled the way it was";
+
+	memory.close(false);
+	UFile::erase(dbPath);
+}
+
 TEST(MemoryTest, CreateSignaturePostDecimatesImageWhenPostDecimationGreaterThanOne)
 {
 	// kMemImagePostDecimation > 1 causes createSignature to downsample the RGB image
@@ -2993,6 +3131,142 @@ TEST(MemoryTest, GetNodeDataReturnsInMemoryPayloadsWhenSignatureNotSaved)
 	EXPECT_EQ(r.imageCompressed().cols, s->sensorData().imageCompressed().cols);
 }
 
+TEST(MemoryTest, UpdateKeepsUserDataThatArrivesCompressed)
+{
+	// User data can reach update() already compressed, with no raw copy -- as it does
+	// from a serialized SensorData (e.g., rtabmap_ros's SensorData messages). It must be
+	// stored as it is, like already-compressed images, rather than dropped for lack of
+	// raw data to compress. Checked with and without Mem/BinDataKept, which build the
+	// signature in two different branches, and with and without parallel compression.
+	const cv::Mat userData = (cv::Mat_<float>(1, 4) << 1.0f, 2.0f, 3.0f, 4.0f);
+	for(const char * binDataKept : {"true", "false"})
+	{
+		for(const char * parallel : {"true", "false"})
+		{
+			SCOPED_TRACE(std::string("Mem/BinDataKept=") + binDataKept +
+					" Mem/CompressionParallelized=" + parallel);
+			ParametersMap params = defaultMemoryParams();
+			params[Parameters::kMemBinDataKept()] = binDataKept;
+			params[Parameters::kMemCompressionParallelized()] = parallel;
+			Memory memory(params);
+
+			SensorData data(cv::Mat(8, 8, CV_8UC1, cv::Scalar(128)));
+			data.setUserData(compressData2(userData)); // bytes: taken as already compressed
+			ASSERT_TRUE(data.userDataRaw().empty());
+			ASSERT_FALSE(data.userDataCompressed().empty());
+
+			ASSERT_TRUE(memory.update(data, Transform(0, 0, 0, 0, 0, 0), cv::Mat::eye(6, 6, CV_64FC1) * 0.01));
+			const Signature * s = memory.getSignature(memory.getLastSignatureId());
+			ASSERT_NE(s, nullptr);
+			ASSERT_FALSE(s->sensorData().userDataCompressed().empty());
+			const cv::Mat stored = uncompressData(s->sensorData().userDataCompressed());
+			ASSERT_EQ(stored.size(), userData.size());
+			ASSERT_EQ(stored.type(), userData.type());
+			EXPECT_EQ(0.0, cv::norm(stored, userData, cv::NORM_INF));
+		}
+	}
+}
+
+TEST(MemoryTest, UpdateReusesTheGivenCompressedData)
+{
+	// Data given both raw and compressed is not compressed again: the compressed copy
+	// given is stored as is, sharing its buffer. For the scan, only while Memory has not
+	// filtered it, since a filtered scan no longer matches the compressed one given.
+	cv::Mat points(1, 10, CV_32FC3);
+	for(int i = 0; i < points.cols; ++i)
+	{
+		points.at<cv::Vec3f>(0, i) = cv::Vec3f(1.0f + i, 0.5f * i, 0.0f);
+	}
+	for(const char * binDataKept : {"true", "false"})
+	{
+		for(const char * parallel : {"true", "false"})
+		{
+			for(const char * downsample : {"1", "2"})
+			{
+				SCOPED_TRACE(std::string("Mem/BinDataKept=") + binDataKept +
+						" Mem/CompressionParallelized=" + parallel +
+						" Mem/LaserScanDownsampleStepSize=" + downsample);
+				ParametersMap params = defaultMemoryParams();
+				params[Parameters::kMemBinDataKept()] = binDataKept;
+				params[Parameters::kMemCompressionParallelized()] = parallel;
+				params[Parameters::kMemLaserScanDownsampleStepSize()] = downsample;
+				Memory memory(params);
+
+				SensorData data(cv::Mat(8, 8, CV_8UC1, cv::Scalar(128)));
+				const LaserScan compressedScan(compressData2(points), points.cols, 10.0f, LaserScan::kXYZ);
+				data.setLaserScan(compressedScan);
+				data.setLaserScan(LaserScan(points, points.cols, 10.0f, LaserScan::kXYZ), false);
+				data.setUserData(points.t()); // raw, several rows: compressed by setUserData()
+				ASSERT_FALSE(data.userDataCompressed().empty());
+				ASSERT_FALSE(data.laserScanRaw().isEmpty());
+				ASSERT_FALSE(data.laserScanCompressed().isEmpty());
+
+				ASSERT_TRUE(memory.update(data, Transform(0, 0, 0, 0, 0, 0), cv::Mat::eye(6, 6, CV_64FC1) * 0.01));
+				const Signature * s = memory.getSignature(memory.getLastSignatureId());
+				ASSERT_NE(s, nullptr);
+
+				EXPECT_EQ(s->sensorData().userDataCompressed().data, data.userDataCompressed().data);
+
+				const LaserScan & stored = s->sensorData().laserScanCompressed();
+				ASSERT_FALSE(stored.isEmpty());
+				if(std::string(downsample) == "1")
+				{
+					EXPECT_EQ(stored.data().data, compressedScan.data().data);
+				}
+				else
+				{
+					EXPECT_NE(stored.data().data, compressedScan.data().data);
+					EXPECT_EQ(uncompressData(stored.data()).cols, points.cols / 2);
+				}
+			}
+		}
+	}
+}
+
+TEST(MemoryTest, GetNodeDataLoadsTheGridOfASavedSignatureFromDatabase)
+{
+	// Once a signature still in WM is saved (Rtabmap::process() does it right after
+	// adding it, when the database is not in memory), saveLocationData() drops its
+	// compressed data but keeps the raw grid cells, so gridCellSize() stays set. A
+	// request for the grid alone must not be answered from memory on the strength of
+	// that cell size: it would return the raw cells only, and callers that only read
+	// the compressed ones (e.g., rtabmap_ros's conversion to messages) would get an
+	// empty grid. It has to be loaded from the database, like the other payloads.
+	const std::string dbPath = uniqueDbPath();
+	ParametersMap params = defaultMemoryParams();
+	params[Parameters::kMemBinDataKept()] = "true";
+	params[Parameters::kRGBDCreateOccupancyGrid()] = "true";
+	Memory memory(params);
+	ASSERT_TRUE(memory.init(dbPath));
+
+	SensorData data(cv::Mat(8, 8, CV_8UC1, cv::Scalar(128)));
+	cv::Mat obstacles(1, 3, CV_32FC3);
+	for(int i = 0; i < 3; ++i)
+	{
+		obstacles.at<cv::Vec3f>(0, i) = cv::Vec3f(float(i) * 0.1f, 0.0f, 0.0f);
+	}
+	const float kCellSize = 0.05f;
+	data.setOccupancyGrid(cv::Mat(), obstacles, cv::Mat(), kCellSize, cv::Point3f(0, 0, 0));
+	ASSERT_TRUE(memory.update(data, Transform(0, 0, 0, 0, 0, 0), cv::Mat::eye(6, 6, CV_64FC1) * 0.01));
+	const int id = memory.getLastSignatureId();
+
+	memory.saveLocationData(id);
+	const Signature * s = memory.getSignature(id);
+	ASSERT_NE(s, nullptr);
+	ASSERT_TRUE(s->isSaved());
+	ASSERT_TRUE(s->sensorData().gridObstacleCellsCompressed().empty()); // dropped by the save
+	ASSERT_FLOAT_EQ(s->sensorData().gridCellSize(), kCellSize);         // but still set
+	memory.emptyTrash(); // flush the async writer so the row can be read back
+
+	SensorData r = memory.getNodeData(id, /*images=*/false, /*scan=*/false, /*userData=*/false, /*occupancyGrid=*/true);
+	EXPECT_FALSE(r.gridObstacleCellsCompressed().empty());
+	EXPECT_FLOAT_EQ(r.gridCellSize(), kCellSize);
+	EXPECT_EQ(r.imageCompressed().rows, 0);
+
+	memory.close(false);
+	UFile::erase(dbPath);
+}
+
 TEST(MemoryTest, GetNodeDataMasksFieldsThatWereNotRequested)
 {
 	// Even when a signature has all payloads populated, getNodeData must clear the
@@ -3132,6 +3406,7 @@ TEST(MemoryTest, GetNodeDataLoadsEachPayloadTypeFromDatabase)
 		expectScanEmpty(r.laserScanCompressed());
 		EXPECT_EQ(r.userDataCompressed().rows, 0);
 		EXPECT_FLOAT_EQ(r.gridCellSize(), kCellSize);
+		EXPECT_FALSE(r.gridObstacleCellsCompressed().empty()); // the cells, not just the cell size
 	}
 
 	// All four together.

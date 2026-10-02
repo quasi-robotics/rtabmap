@@ -68,8 +68,19 @@ set(corelib_test_sources
 	test_sensorcapturethread.cpp        #SensorCaptureThread.h
 )
 
+# test_optimizer_gtsam.cpp includes the Vertigo GTSAM factors from
+# corelib/src/optimizer directly, so it needs GTSAM itself (rtabmap_core links
+# it PRIVATE).
+IF(GTSAM_FOUND)
+	list(APPEND corelib_test_sources test_optimizer_gtsam.cpp)  #OptimizerGTSAM.h (Vertigo factors, gravity)
+ENDIF(GTSAM_FOUND)
+
 add_executable(test_corelib ${corelib_test_sources})
 target_link_libraries(test_corelib gtest_main rtabmap_core)
+
+IF(GTSAM_FOUND)
+	target_link_libraries(test_corelib gtsam)
+ENDIF(GTSAM_FOUND)
 
 # test_registrationicp.cpp includes corelib/src/icp/libpointmatcher.h directly
 # to test the LaserScan <-> DataPoints conversions, so it needs the library
@@ -169,6 +180,12 @@ target_link_libraries(test_rtabmap_integration gtest_main rtabmap_core)
 #  `ctest -L long`.
 add_test(NAME test_rtabmap_integration COMMAND test_rtabmap_integration)
 math(EXPR _integration_timeout "1800 * ${_test_timeout_scale}")
+# The Windows runners replay the sample DBs far slower than the Linux and macOS
+# ones (the rest of the suite takes ~3 min there, this test alone went over 30),
+# so they get twice the budget rather than lowering the bar for every platform.
+IF(WIN32)
+	math(EXPR _integration_timeout "${_integration_timeout} * 2")
+ENDIF(WIN32)
 set_tests_properties(test_rtabmap_integration PROPERTIES
         TIMEOUT ${_integration_timeout}
         LABELS  "long")

@@ -101,6 +101,7 @@ Memory::Memory(const ParametersMap & parameters) :
 	_stereoFromMotion(Parameters::defaultMemStereoFromMotion()),
     _imagePreDecimation(Parameters::defaultMemImagePreDecimation()),
 	_imagePostDecimation(Parameters::defaultMemImagePostDecimation()),
+	_legacyDecimatedOctave(false),
 	_compressionParallelized(Parameters::defaultMemCompressionParallelized()),
 	_laserScanDownsampleStepSize(Parameters::defaultMemLaserScanDownsampleStepSize()),
 	_laserScanVoxelSize(Parameters::defaultMemLaserScanVoxelSize()),
@@ -220,6 +221,23 @@ bool Memory::init(const std::string & dbUrl, bool dbOverwritten, const Parameter
 		if(_dbDriver->openConnection(dbUrl, dbOverwritten, isReadOnly()))
 		{
 			success = true;
+
+			// Before 0.23.12 the octave of a keypoint scaled into a decimated image was
+			// moved the wrong way, which changes the pyramid level its descriptor is
+			// taken from. A map filled that way stays self-consistent only if we keep
+			// filling it that way; a new one gets the corrected scaling.
+			_legacyDecimatedOctave =
+					uStrNumCmp(_dbDriver->getDatabaseVersion(), "0.23.12") < 0;
+			// Only where the descriptors stored in the map end up different: keypoints
+			// from odometry, scaled into the pre-decimated image before being described.
+			if(_legacyDecimatedOctave && _useOdometryFeatures && _imagePreDecimation > 1)
+			{
+				UWARN("Database \"%s\" was created by version %s, before the octave of "
+						"decimated keypoints was corrected (0.23.12). Its features keep "
+						"being described the old way so that they stay comparable with "
+						"those already in it.",
+						dbUrl.c_str(), _dbDriver->getDatabaseVersion().c_str());
+			}
 			if(postInitClosingEvents) UEventsManager::post(new RtabmapEventInit(std::string("Connecting to database \"") + dbUrl + "\", done!"));
 		}
 		else
@@ -4777,7 +4795,10 @@ SensorData Memory::getNodeData(int locationId, bool images, bool scan, bool user
 			((!images || !s->sensorData().imageCompressed().empty()) &&
 			 (!scan || !s->sensorData().laserScanCompressed().isEmpty()) &&
 			 (!userData || !s->sensorData().userDataCompressed().empty()) &&
-			 (!occupancyGrid || s->sensorData().gridCellSize() != 0.0f))))
+			 (!occupancyGrid ||
+				!s->sensorData().gridGroundCellsCompressed().empty() ||
+				!s->sensorData().gridObstacleCellsCompressed().empty() ||
+				!s->sensorData().gridEmptyCellsCompressed().empty()))))
 	{
 		r = s->sensorData();
 		if(!images)
@@ -5660,7 +5681,13 @@ Signature * Memory::createSignature(const SensorData & inputData, const Transfor
                 if(_imagePreDecimation > 1 || useProvided3dPoints)
                 {
                     float decimationRatio = 1.0f / float(_imagePreDecimation);
-                    double log2value = log(double(_imagePreDecimation))/log(2.0);
+                    // The octave a feature was found at moves with the image it is
+                    // expressed in, by the same ratio as its position: a decimated
+                    // image is already that many pyramid levels down, so scaling the
+                    // keypoints into it lowers their octave. Databases older than
+                    // 0.23.12 were filled with it raised instead; see _legacyDecimatedOctave.
+                    double log2value = log(double(_legacyDecimatedOctave?
+                            double(_imagePreDecimation):double(decimationRatio)))/log(2.0);
                     for(unsigned int i=0; i < keypoints.size(); ++i)
                     {
                         cv::KeyPoint & kpt = keypoints[i];
@@ -5669,7 +5696,10 @@ Signature * Memory::createSignature(const SensorData & inputData, const Transfor
                             kpt.pt.x *= decimationRatio;
                             kpt.pt.y *= decimationRatio;
                             kpt.size *= decimationRatio;
-                            kpt.octave += log2value;
+                            // Never below the finest level of the image it is now
+                            // expressed in: the detail it was found at is not in there
+                            // any more, and ORB refuses a negative octave outright.
+                            kpt.octave = std::max(0, int(kpt.octave + log2value));
                         }
                         if(useProvided3dPoints)
                         {
@@ -6246,7 +6276,7 @@ Signature * Memory::createSignature(const SensorData & inputData, const Transfor
 		UASSERT(keypoints3D.size() == 0 || keypoints3D.size() == wordIds.size());
 		unsigned int i=0;
 		float decimationRatio = float(preDecimation) / float(_imagePostDecimation);
-		double log2value = log(double(preDecimation))/log(2.0);
+		double log2value = log(double(decimationRatio))/log(2.0);
 		for(std::list<int>::iterator iter=wordIds.begin(); iter!=wordIds.end() && i < keypoints.size(); ++iter, ++i)
 		{
 			cv::KeyPoint kpt = keypoints[i];
@@ -6256,7 +6286,7 @@ Signature * Memory::createSignature(const SensorData & inputData, const Transfor
 				kpt.pt.x *= decimationRatio;
 				kpt.pt.y *= decimationRatio;
 				kpt.size *= decimationRatio;
-				kpt.octave += log2value;
+				kpt.octave = std::max(0, int(kpt.octave + log2value));
 			}
 			words.insert(std::make_pair(*iter, words.size()));
 			wordsKpts.push_back(kpt);
@@ -6642,6 +6672,10 @@ Signature * Memory::createSignature(const SensorData & inputData, const Transfor
 		bool reuseCompressedDepthConfidence =
 				depthConfidence.data == data.depthConfidenceRaw().data &&
 				!data.depthConfidenceCompressed().empty();
+		bool reuseCompressedUserData = !data.userDataCompressed().empty();
+		bool reuseCompressedScan =
+				laserScan.data().data == data.laserScanRaw().data().data &&
+				!data.laserScanCompressed().isEmpty();
 
 		cv::Mat compressedImage;
 		cv::Mat compressedDepth;
@@ -6667,11 +6701,11 @@ Signature * Memory::createSignature(const SensorData & inputData, const Transfor
 			{
 				ctDepthConfidence.start();
 			}
-			if(!laserScan.isEmpty())
+			if(!laserScan.isEmpty() && !reuseCompressedScan)
 			{
 				ctLaserScan.start();
 			}
-			if(!data.userDataRaw().empty())
+			if(!data.userDataRaw().empty() && !reuseCompressedUserData)
 			{
 				ctUserData.start();
 			}
@@ -6684,16 +6718,16 @@ Signature * Memory::createSignature(const SensorData & inputData, const Transfor
 			compressedImage = ctImage.getCompressedData();
 			compressedDepth = ctDepth.getCompressedData();
 			compressedDepthConfidence = ctDepthConfidence.getCompressedData();
-			compressedScan = ctLaserScan.getCompressedData();
-			compressedUserData = ctUserData.getCompressedData();
+			compressedScan = reuseCompressedScan?data.laserScanCompressed().data():ctLaserScan.getCompressedData();
+			compressedUserData = reuseCompressedUserData?data.userDataCompressed():ctUserData.getCompressedData();
 		}
 		else
 		{
 			compressedImage = reuseCompressedImage?cv::Mat():compressImage2(image, _rgbCompressionFormat);
 			compressedDepth = reuseCompressedDepth?cv::Mat():compressImage2(depthOrRightImage, depthOrRightImage.type() == CV_32FC1 || depthOrRightImage.type() == CV_16UC1?_depthCompressionFormat:_rgbCompressionFormat);
 			compressedDepthConfidence = reuseCompressedDepthConfidence?cv::Mat():compressData2(depthConfidence);
-			compressedScan = compressData2(laserScan.data());
-			compressedUserData = compressData2(data.userDataRaw());
+			compressedScan = reuseCompressedScan?data.laserScanCompressed().data():compressData2(laserScan.data());
+			compressedUserData = reuseCompressedUserData?data.userDataCompressed():compressData2(data.userDataRaw());
 		}
 
 		s = new Signature(id,
@@ -6757,28 +6791,32 @@ Signature * Memory::createSignature(const SensorData & inputData, const Transfor
 		// just compress user data and laser scan (scans can be used for local scan matching)
 		cv::Mat compressedScan;
 		cv::Mat compressedUserData;
+		bool reuseCompressedUserData = !data.userDataCompressed().empty();
+		bool reuseCompressedScan =
+				laserScan.data().data == data.laserScanRaw().data().data &&
+				!data.laserScanCompressed().isEmpty();
 		if(_compressionParallelized)
 		{
 			rtabmap::CompressionThread ctUserData(data.userDataRaw());
 			rtabmap::CompressionThread ctLaserScan(laserScan.data());
-			if(!data.userDataRaw().empty() && !isIntermediateNode)
+			if(!data.userDataRaw().empty() && !isIntermediateNode && !reuseCompressedUserData)
 			{
 				ctUserData.start();
 			}
-			if(!laserScan.isEmpty() && !isIntermediateNode)
+			if(!laserScan.isEmpty() && !isIntermediateNode && !reuseCompressedScan)
 			{
 				ctLaserScan.start();
 			}
 			ctUserData.join();
 			ctLaserScan.join();
 
-			compressedScan = ctLaserScan.getCompressedData();
-			compressedUserData = ctUserData.getCompressedData();
+			compressedScan = reuseCompressedScan?data.laserScanCompressed().data():ctLaserScan.getCompressedData();
+			compressedUserData = reuseCompressedUserData && !isIntermediateNode?data.userDataCompressed():ctUserData.getCompressedData();
 		}
 		else
 		{
-			compressedScan = compressData2(laserScan.data());
-			compressedUserData = compressData2(data.userDataRaw());
+			compressedScan = reuseCompressedScan?data.laserScanCompressed().data():compressData2(laserScan.data());
+			compressedUserData = reuseCompressedUserData?data.userDataCompressed():compressData2(data.userDataRaw());
 		}
 
 		s = new Signature(id,
