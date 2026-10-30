@@ -333,6 +333,11 @@ PreferencesDialog::PreferencesDialog(QWidget * parent) :
 	_ui->reextract_nn->setItemData(7, 0, Qt::UserRole - 1);
 #endif
 
+#ifndef RTABMAP_NANOFLANN
+	_ui->comboBox_dictionary_strategy->setItemData(VWDictionary::kNNNanoFlannKdTree, 0, Qt::UserRole - 1);
+	_ui->reextract_nn->setItemData(9, 0, Qt::UserRole - 1);
+#endif
+
 #if CV_MAJOR_VERSION >= 3
 	_ui->groupBox_fast_opencv2->setEnabled(false);
 #else
@@ -1504,6 +1509,7 @@ PreferencesDialog::PreferencesDialog(QWidget * parent) :
 	_ui->odom_flow_scanKeyframeThr->setObjectName(Parameters::kOdomScanKeyFrameThr().c_str());
 	_ui->odom_flow_guessMotion->setObjectName(Parameters::kOdomGuessMotion().c_str());
 	_ui->odom_guess_smoothing_delay->setObjectName(Parameters::kOdomGuessSmoothingDelay().c_str());
+	_ui->odom_imu_gravity->setObjectName(Parameters::kOdomImuGravity().c_str());
 	_ui->odom_imageDecimation->setObjectName(Parameters::kOdomImageDecimation().c_str());
 	_ui->odom_alignWithGround->setObjectName(Parameters::kOdomAlignWithGround().c_str());
 	_ui->odom_lidar_deskewing->setObjectName(Parameters::kOdomDeskewing().c_str());
@@ -1798,6 +1804,7 @@ PreferencesDialog::PreferencesDialog(QWidget * parent) :
 	_ui->MarkerStrategy->setCurrentIndex(Parameters::defaultMarkerStrategy());
 	updateAvailableMarkerDictionaries();
 	_ui->MarkerDictionary->setObjectName(Parameters::kMarkerDictionary().c_str());
+	_ui->MarkerAprilTagUpright->setObjectName(Parameters::kMarkerAprilTagUpright().c_str());
 	_ui->MarkerLength->setObjectName(Parameters::kMarkerLength().c_str());
 	_ui->MarkerLengths->setObjectName(Parameters::kMarkerLengths().c_str());
 	_ui->MarkerMaxDepthError->setObjectName(Parameters::kMarkerMaxDepthError().c_str());

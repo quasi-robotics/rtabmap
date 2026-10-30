@@ -102,6 +102,7 @@ Memory::Memory(const ParametersMap & parameters) :
     _imagePreDecimation(Parameters::defaultMemImagePreDecimation()),
 	_imagePostDecimation(Parameters::defaultMemImagePostDecimation()),
 	_legacyDecimatedOctave(false),
+	_inverseDepthCompressionAllowed(true),
 	_compressionParallelized(Parameters::defaultMemCompressionParallelized()),
 	_laserScanDownsampleStepSize(Parameters::defaultMemLaserScanDownsampleStepSize()),
 	_laserScanVoxelSize(Parameters::defaultMemLaserScanVoxelSize()),
@@ -137,6 +138,8 @@ Memory::Memory(const ParametersMap & parameters) :
 	_workingMemIntermediateNodesCount(0),
 	_stMemIntermediateNodesCount(0),
 	_allNodesInWM(true),
+	_saved2DMapOutdated(false),
+	_savedOptimizedMeshOutdated(false),
 	_receivingOdometryFeatures(false),
 	_badSignRatio(Parameters::defaultKpBadSignRatio()),
 	_tfIdfLikelihoodUsed(Parameters::defaultKpTfIdfLikelihoodUsed()),
@@ -228,6 +231,11 @@ bool Memory::init(const std::string & dbUrl, bool dbOverwritten, const Parameter
 			// filling it that way; a new one gets the corrected scaling.
 			_legacyDecimatedOctave =
 					uStrNumCmp(_dbDriver->getDatabaseVersion(), "0.23.12") < 0;
+			// Depth images compressed as inverse depth cannot be read before 0.24, which
+			// would still open databases created with Db/TargetVersion < 0.24 or by an
+			// older version.
+			_inverseDepthCompressionAllowed =
+					uStrNumCmp(_dbDriver->getDatabaseVersion(), "0.24.0") >= 0;
 			// Only where the descriptors stored in the map end up different: keypoints
 			// from odometry, scaled into the pre-decimated image before being described.
 			if(_legacyDecimatedOctave && _useOdometryFeatures && _imagePreDecimation > 1)
@@ -826,6 +834,19 @@ void Memory::parseParameters(const ParametersMap & parameters)
 	Parameters::parse(params, Parameters::kMemIntermediateNodeDataKept(), _saveIntermediateNodeData);
 	Parameters::parse(params, Parameters::kMemImageCompressionFormat(), _rgbCompressionFormat);
 	Parameters::parse(params, Parameters::kMemDepthCompressionFormat(), _depthCompressionFormat);
+	{
+		std::string codec;
+		float maxDepth, quantization;
+		if(!parseImageCompressionFormat(_depthCompressionFormat, codec, maxDepth, quantization) ||
+		   (codec != ".png" && codec != ".rvl"))
+		{
+			UWARN("Invalid %s=\"%s\", using default \"%s\".",
+					Parameters::kMemDepthCompressionFormat().c_str(),
+					_depthCompressionFormat.c_str(),
+					Parameters::defaultMemDepthCompressionFormat().c_str());
+			_depthCompressionFormat = Parameters::defaultMemDepthCompressionFormat();
+		}
+	}
 	Parameters::parse(params, Parameters::kMemRehearsalIdUpdatedToNewOne(), _idUpdatedToNewOneRehearsal);
 	Parameters::parse(params, Parameters::kMemGenerateIds(), _generateIds);
 	Parameters::parse(params, Parameters::kMemBadSignaturesIgnored(), _badSignaturesIgnored);
@@ -2168,6 +2189,9 @@ void Memory::clear()
 {
 	UDEBUG("");
 
+	_saved2DMapOutdated = false;
+	_savedOptimizedMeshOutdated = false;
+
 	// empty the STM
 	while(_stMem.size())
 	{
@@ -2641,6 +2665,57 @@ std::map<int, Transform> Memory::loadOptimizedPoses(Transform * lastlocalization
 				  Parameters::kMemInitWMWithAllNodes().c_str());
 			return std::map<int, Transform>();
 		}
+
+		// Make sure that all nodes in working memory linked to the optimized
+		// graph are in it. The optimized poses are saved only on clean shutdown,
+		// so after an unclean shutdown, newer nodes may have been saved without
+		// the optimized graph being updated (#1772). Intermediate nodes are
+		// ignored, and disconnected sessions are not reachable from the graph.
+		std::list<int> toVisit;
+		std::set<int> visited;
+		for(std::map<int, Transform>::iterator iter=poses.lower_bound(1); iter!=poses.end(); ++iter)
+		{
+			toVisit.push_back(iter->first);
+			visited.insert(iter->first);
+		}
+		std::vector<int> missingIds;
+		while(!toVisit.empty())
+		{
+			// All visited nodes are in WM: the optimized poses were checked
+			// above and only linked nodes in WM are added
+			const Signature * s = this->getSignature(toVisit.front());
+			UASSERT_MSG(s != 0, uFormat("Node %d not found in memory", toVisit.front()).c_str());
+			toVisit.pop_front();
+			for(std::multimap<int, Link>::const_iterator iter=s->getLinks().begin(); iter!=s->getLinks().end(); ++iter)
+			{
+				int id = iter->first;
+				if(id > 0 &&
+				   _workingMem.find(id) != _workingMem.end() &&
+				   visited.insert(id).second)
+				{
+					toVisit.push_back(id);
+					const Signature * linked = this->getSignature(id);
+					if(linked && linked->getWeight() != -1)
+					{
+						missingIds.push_back(id);
+					}
+				}
+			}
+		}
+		if(!missingIds.empty())
+		{
+			std::sort(missingIds.begin(), missingIds.end());
+			UWARN("%d node(s) in working memory linked to the saved optimized graph (%d poses) "
+				  "are not in it (e.g., node %d), the saved optimized graph is outdated (the "
+				  "database may not have been closed properly). Returning empty optimized "
+				  "poses to force re-update, the saved 2D map and optimized mesh are also ignored.",
+				  (int)missingIds.size(),
+				  (int)poses.size(),
+				  missingIds.front());
+			_saved2DMapOutdated = true;
+			_savedOptimizedMeshOutdated = true;
+			return std::map<int, Transform>();
+		}
 		return poses;
 
 	}
@@ -2652,6 +2727,7 @@ void Memory::save2DMap(const cv::Mat & map, float xMin, float yMin, float cellSi
 	if(_dbDriver && !this->isReadOnly())
 	{
 		_dbDriver->save2DMap(map, xMin, yMin, cellSize);
+		_saved2DMapOutdated = false;
 	}
 	else
 	{
@@ -2665,6 +2741,11 @@ cv::Mat Memory::load2DMap(float & xMin, float & yMin, float & cellSize) const
 {
 	if(_dbDriver)
 	{
+		if(_saved2DMapOutdated)
+		{
+			UWARN("Saved 2D map is ignored as it was created from an outdated optimized graph.");
+			return cv::Mat();
+		}
 		return _dbDriver->load2DMap(xMin, yMin, cellSize);
 	}
 	return cv::Mat();
@@ -2683,6 +2764,7 @@ void Memory::saveOptimizedMesh(
 	if(_dbDriver)
 	{
 		_dbDriver->saveOptimizedMesh(cloud, polygons, texCoords, textures);
+		_savedOptimizedMeshOutdated = false;
 	}
 }
 
@@ -2697,6 +2779,11 @@ cv::Mat Memory::loadOptimizedMesh(
 {
 	if(_dbDriver)
 	{
+		if(_savedOptimizedMeshOutdated)
+		{
+			UWARN("Saved optimized mesh is ignored as it was created from an outdated optimized graph.");
+			return cv::Mat();
+		}
 		return _dbDriver->loadOptimizedMesh(polygons, texCoords, textures);
 	}
 	return cv::Mat();
@@ -3434,13 +3521,18 @@ Transform Memory::computeTransform(
 	   (_registrationPipeline->isScanRequired() && fromS.sensorData().imageCompressed().empty() && fromS.sensorData().laserScanCompressed().isEmpty()) ||
 	   (_registrationPipeline->isUserDataRequired() && fromS.sensorData().imageCompressed().empty() && fromS.sensorData().userDataCompressed().empty()))
 	{
+		// getNodeData() doesn't load global descriptors from the database, keep those in RAM
+		std::vector<GlobalDescriptor> globalDescriptors = fromS.sensorData().globalDescriptors();
 		fromS.sensorData() = getNodeData(fromS.id(), true, true, true, true);
+		fromS.sensorData().setGlobalDescriptors(globalDescriptors);
 	}
 	if(((_reextractLoopClosureFeatures && (_registrationPipeline->isImageRequired() || guess.isNull())) && toS.sensorData().imageCompressed().empty()) ||
 	   (_registrationPipeline->isScanRequired() && toS.sensorData().imageCompressed().empty() && toS.sensorData().laserScanCompressed().isEmpty()) ||
 	   (_registrationPipeline->isUserDataRequired() && toS.sensorData().imageCompressed().empty() && toS.sensorData().userDataCompressed().empty()))
 	{
+		std::vector<GlobalDescriptor> globalDescriptors = toS.sensorData().globalDescriptors();
 		toS.sensorData() = getNodeData(toS.id(), true, true, true, true);
+		toS.sensorData().setGlobalDescriptors(globalDescriptors);
 	}
 	// uncompress only what we need
 	cv::Mat imgBuf, depthBuf, userBuf;
@@ -5227,7 +5319,7 @@ Signature * Memory::createSignature(const SensorData & inputData, const Transfor
 	if(!isIntermediateNode)
 	{
 		// We need raw images if we need to extract features and/or do tag detection
-		bool needRawImages = _feature2D->getMaxFeatures() >= 0 && 
+		bool needRawImages = (_feature2D->getMaxFeatures() >= 0 &&
 			(!_useOdometryFeatures ||
 			 data.keypoints().empty() ||
 			 (int)data.keypoints().size() != data.descriptors().rows ||
@@ -5235,7 +5327,9 @@ Signature * Memory::createSignature(const SensorData & inputData, const Transfor
 			 _detectMarkers ||
 			 _rotateImagesUpsideUp ||
 			 _imagePostDecimation > 1 ||
-			 (_createOccupancyGrid && _localMapMaker->isGridFromDepth()));
+			 (_createOccupancyGrid && _localMapMaker->isGridFromDepth()))) ||
+			// Images rectified below: stereo always, RGB-D unless only its features are
+			(!_imagesAlreadyRectified && !(_rectifyOnlyFeatures && data.stereoCameraModels().empty()));
 
 		// Note: we could avoid uncompressing scan if we don't do any filtering
 		// and if we don't use it for local occupancy grid
@@ -5758,7 +5852,7 @@ Signature * Memory::createSignature(const SensorData & inputData, const Transfor
 					cv::KeyPoint::convert(keypoints,pointsIn);
 					if(decimatedData.cameraModels()[0].D_raw().cols == 6)
 					{
-#if CV_MAJOR_VERSION > 2 or (CV_MAJOR_VERSION == 2 and (CV_MINOR_VERSION >4 or (CV_MINOR_VERSION == 4 and CV_SUBMINOR_VERSION >=10)))
+#if CV_MAJOR_VERSION > 2 || (CV_MAJOR_VERSION == 2 && (CV_MINOR_VERSION >4 || (CV_MINOR_VERSION == 4 && CV_SUBMINOR_VERSION >=10)))
 						// Equidistant / FishEye
 						// get only k parameters (k1,k2,p1,p2,k3,k4)
 						cv::Mat D(1, 4, CV_64FC1);
@@ -5814,7 +5908,7 @@ Signature * Memory::createSignature(const SensorData & inputData, const Transfor
 						pointsIn.push_back(cv::Point2f(keypoints.at(i).pt.x-subImageWidth*cameraIndex, keypoints.at(i).pt.y));
 						if(decimatedData.cameraModels()[cameraIndex].D_raw().cols == 6)
 						{
-#if CV_MAJOR_VERSION > 2 or (CV_MAJOR_VERSION == 2 and (CV_MINOR_VERSION >4 or (CV_MINOR_VERSION == 4 and CV_SUBMINOR_VERSION >=10)))
+#if CV_MAJOR_VERSION > 2 || (CV_MAJOR_VERSION == 2 && (CV_MINOR_VERSION >4 || (CV_MINOR_VERSION == 4 && CV_SUBMINOR_VERSION >=10)))
 							// Equidistant / FishEye
 							// get only k parameters (k1,k2,p1,p2,k3,k4)
 							cv::Mat D(1, 4, CV_64FC1);
@@ -5975,7 +6069,7 @@ Signature * Memory::createSignature(const SensorData & inputData, const Transfor
 					cv::KeyPoint::convert(keypoints,pointsIn);
 					if(data.cameraModels()[0].D_raw().cols == 6)
 					{
-#if CV_MAJOR_VERSION > 2 or (CV_MAJOR_VERSION == 2 and (CV_MINOR_VERSION >4 or (CV_MINOR_VERSION == 4 and CV_SUBMINOR_VERSION >=10)))
+#if CV_MAJOR_VERSION > 2 || (CV_MAJOR_VERSION == 2 && (CV_MINOR_VERSION >4 || (CV_MINOR_VERSION == 4 && CV_SUBMINOR_VERSION >=10)))
 						// Equidistant / FishEye
 						// get only k parameters (k1,k2,p1,p2,k3,k4)
 						cv::Mat D(1, 4, CV_64FC1);
@@ -6045,7 +6139,7 @@ Signature * Memory::createSignature(const SensorData & inputData, const Transfor
 						pointsIn.push_back(cv::Point2f(keypoints.at(i).pt.x-subImageWidth*cameraIndex, keypoints.at(i).pt.y));
 						if(data.cameraModels()[cameraIndex].D_raw().cols == 6)
 						{
-#if CV_MAJOR_VERSION > 2 or (CV_MAJOR_VERSION == 2 and (CV_MINOR_VERSION >4 or (CV_MINOR_VERSION == 4 and CV_SUBMINOR_VERSION >=10)))
+#if CV_MAJOR_VERSION > 2 || (CV_MAJOR_VERSION == 2 && (CV_MINOR_VERSION >4 || (CV_MINOR_VERSION == 4 && CV_SUBMINOR_VERSION >=10)))
 							// Equidistant / FishEye
 							// get only k parameters (k1,k2,p1,p2,k3,k4)
 							cv::Mat D(1, 4, CV_64FC1);
@@ -6535,24 +6629,17 @@ Signature * Memory::createSignature(const SensorData & inputData, const Transfor
 			// words3D should have the same size than words if not empty
 			float bad_point = std::numeric_limits<float>::quiet_NaN ();
 			UASSERT(words3D.size() == 0 || words.size() == words3D.size());
-			bool words3DWasEmpty = words3D.empty();
 			int added3DPointsWithoutDepth = 0;
+			if(words3D.empty())
+			{
+				// words3D must be parallel to wordsKpts (indexed by kptIdx = iter->second),
+				// as expected by all consumers (e.g. DBDriverSqlite3: getWords3()[w->second]).
+				words3D.resize(words.size(), cv::Point3f(bad_point,bad_point,bad_point));
+			}
 			for(std::multimap<int, int>::const_iterator iter=words.begin(); iter!=words.end(); ++iter)
 			{
 				std::map<int, cv::Point3f>::iterator jter=inliers.find(iter->first);
-				if(words3DWasEmpty)
-				{
-					if(jter != inliers.end())
-					{
-						words3D.push_back(jter->second);
-						++added3DPointsWithoutDepth;
-					}
-					else
-					{
-						words3D.push_back(cv::Point3f(bad_point,bad_point,bad_point));
-					}
-				}
-				else if(!util3d::isFinite(words3D[iter->second]) && jter != inliers.end())
+				if(!util3d::isFinite(words3D[iter->second]) && jter != inliers.end())
 				{
 					words3D[iter->second] = jter->second;
 					++added3DPointsWithoutDepth;
@@ -6625,6 +6712,44 @@ Signature * Memory::createSignature(const SensorData & inputData, const Transfor
 		std::vector<unsigned char> imageBytes;
 		std::vector<unsigned char> depthBytes;
 
+		std::string depthCompressionFormat = _depthCompressionFormat;
+		bool reuseCompressedDepth =
+				depthOrRightImage.data == data.depthOrRightRaw().data &&
+				!data.depthOrRightCompressed().empty();
+		if(!_inverseDepthCompressionAllowed)
+		{
+			std::string codec;
+			float maxDepth, quantization;
+			if(parseImageCompressionFormat(depthCompressionFormat, codec, maxDepth, quantization) && maxDepth > 0.0f)
+			{
+				static bool warned = false;
+				if(!warned)
+				{
+					UWARN("%s=\"%s\": inverse depth compression format is not compatible with database "
+						  "version %s (requires >= 0.24, see %s), \"%s\" format is used instead. This "
+						  "warning is only printed once.",
+						Parameters::kMemDepthCompressionFormat().c_str(),
+						depthCompressionFormat.c_str(),
+						_dbDriver?_dbDriver->getDatabaseVersion().c_str():"",
+						Parameters::kDbTargetVersion().c_str(),
+						codec.c_str());
+					warned = true;
+				}
+				depthCompressionFormat = codec;
+			}
+			if(reuseCompressedDepth &&
+			   compressedDepthFormat(data.depthOrRightCompressed()).find(':') != std::string::npos)
+			{
+				// Already compressed as inverse depth (e.g., received from ROS's
+				// compressed_depth_image_transport), re-compress it.
+				reuseCompressedDepth = false;
+				if(depthOrRightImage.empty())
+				{
+					depthOrRightImage = uncompressImage(data.depthOrRightCompressed());
+				}
+			}
+		}
+
 		if(!depthOrRightImage.empty() && depthOrRightImage.type() == CV_32FC1)
 		{
 			if(_saveDepth16Format)
@@ -6640,7 +6765,7 @@ Signature * Memory::createSignature(const SensorData & inputData, const Transfor
 				}
 				depthOrRightImage = util2d::cvtDepthFromFloat(depthOrRightImage);
 			}
-			else if(_depthCompressionFormat == ".rvl")
+			else if(depthCompressionFormat == ".rvl")
 			{
 				static bool warned = false;
 				if(!warned)
@@ -6650,13 +6775,16 @@ Signature * Memory::createSignature(const SensorData & inputData, const Transfor
 						  "images will be compressed in \".png\" format instead. Explicitly "
 						  "set %s to true to keep using \"%s\" format and images will be "
 						  "converted to 16bits for convenience (warning: that would "
-						  "remove all depth values over 65 meters). Explicitly set %s=\".png\" "
+						  "remove all depth values over 65 meters). Set %s=\".rvl:<maxDepth>:<quantization>\" "
+						  "(e.g., \".rvl:10:100\") to compress them in RVL as 16 bits inverse depth "
+						  "(lossy, see parameter's description). Explicitly set %s=\".png\" "
 						  "to suppress this warning. This warning is only printed once.",
 						Parameters::kMemSaveDepth16Format().c_str(),
 						Parameters::kMemDepthCompressionFormat().c_str(),
-						_depthCompressionFormat.c_str(),
+						depthCompressionFormat.c_str(),
 						Parameters::kMemSaveDepth16Format().c_str(),
-						_depthCompressionFormat.c_str(),
+						depthCompressionFormat.c_str(),
+						Parameters::kMemDepthCompressionFormat().c_str(),
 						Parameters::kMemDepthCompressionFormat().c_str());
 					warned = true;
 				}
@@ -6666,9 +6794,8 @@ Signature * Memory::createSignature(const SensorData & inputData, const Transfor
 		bool reuseCompressedImage =
 				image.data == data.imageRaw().data &&
 				!data.imageCompressed().empty();
-		bool reuseCompressedDepth =
-				depthOrRightImage.data == data.depthOrRightRaw().data &&
-				!data.depthOrRightCompressed().empty();
+		reuseCompressedDepth = reuseCompressedDepth &&
+				depthOrRightImage.data == data.depthOrRightRaw().data;
 		bool reuseCompressedDepthConfidence =
 				depthConfidence.data == data.depthConfidenceRaw().data &&
 				!data.depthConfidenceCompressed().empty();
@@ -6685,7 +6812,7 @@ Signature * Memory::createSignature(const SensorData & inputData, const Transfor
 		if(_compressionParallelized)
 		{
 			rtabmap::CompressionThread ctImage(image, _rgbCompressionFormat);
-			rtabmap::CompressionThread ctDepth(depthOrRightImage, depthOrRightImage.type() == CV_32FC1 || depthOrRightImage.type() == CV_16UC1?_depthCompressionFormat:_rgbCompressionFormat);
+			rtabmap::CompressionThread ctDepth(depthOrRightImage, depthOrRightImage.type() == CV_32FC1 || depthOrRightImage.type() == CV_16UC1?depthCompressionFormat:_rgbCompressionFormat);
 			rtabmap::CompressionThread ctDepthConfidence(depthConfidence);
 			rtabmap::CompressionThread ctLaserScan(laserScan.data());
 			rtabmap::CompressionThread ctUserData(data.userDataRaw());
@@ -6724,7 +6851,7 @@ Signature * Memory::createSignature(const SensorData & inputData, const Transfor
 		else
 		{
 			compressedImage = reuseCompressedImage?cv::Mat():compressImage2(image, _rgbCompressionFormat);
-			compressedDepth = reuseCompressedDepth?cv::Mat():compressImage2(depthOrRightImage, depthOrRightImage.type() == CV_32FC1 || depthOrRightImage.type() == CV_16UC1?_depthCompressionFormat:_rgbCompressionFormat);
+			compressedDepth = reuseCompressedDepth?cv::Mat():compressImage2(depthOrRightImage, depthOrRightImage.type() == CV_32FC1 || depthOrRightImage.type() == CV_16UC1?depthCompressionFormat:_rgbCompressionFormat);
 			compressedDepthConfidence = reuseCompressedDepthConfidence?cv::Mat():compressData2(depthConfidence);
 			compressedScan = reuseCompressedScan?data.laserScanCompressed().data():compressData2(laserScan.data());
 			compressedUserData = reuseCompressedUserData?data.userDataCompressed():compressData2(data.userDataRaw());

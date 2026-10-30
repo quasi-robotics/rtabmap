@@ -42,8 +42,10 @@ set(corelib_test_sources
 	test_link.cpp                       #Link.h
 	test_optimizer.cpp                  #Optimizer.h
 	test_gps.cpp                        #GPS.h
+	test_parameters.cpp                 #Parameters.h
 	test_imu.cpp                        #IMU.h
 	test_imufilter.cpp                  #IMUFilter.h
+	test_imumotionpredictor.cpp         #ImuMotionPredictor.h
 	test_imuthread.cpp                  #IMUThread.h
 	test_landmark.cpp                   #Landmark.h
 	test_localgrid.cpp                  #LocalGrid.h
@@ -160,6 +162,20 @@ IF(BUILD_PERF_TESTS)
 
 	add_test(NAME test_graph_perf COMMAND test_graph_perf)
 	set_tests_properties(test_graph_perf PROPERTIES
+			TIMEOUT ${_perf_timeout}
+			LABELS  "performance")
+
+	# Comparison of the depth image compression approaches (sizes, times, errors) for
+	# 16UC1 and 32FC1 depth images: PNG, RVL, zlib, the legacy 4-channel PNG of 32FC1
+	# images, their conversion to 16UC1 millimeters, and their quantization as 16 bits
+	# inverse depth (Mem/DepthCompressionFormat=".png:max:q" or ".rvl:max:q"):
+	#   bin/test_compression_perf
+	#   bin/test_compression_perf --gtest_filter=*Synthetic*
+	add_executable(test_compression_perf perf_compression.cpp)
+	target_link_libraries(test_compression_perf gtest_main rtabmap_core)
+
+	add_test(NAME test_compression_perf COMMAND test_compression_perf)
+	set_tests_properties(test_compression_perf PROPERTIES
 			TIMEOUT ${_perf_timeout}
 			LABELS  "performance")
 ENDIF(BUILD_PERF_TESTS)

@@ -8,6 +8,7 @@
 #include <rtabmap/core/Link.h>
 #include <rtabmap/core/Parameters.h>
 #include <rtabmap/core/RegistrationInfo.h>
+#include <rtabmap/core/util3d.h>
 #include <rtabmap/core/util3d_transforms.h>
 #include <rtabmap/core/SensorData.h>
 #include <rtabmap/core/StereoCameraModel.h>
@@ -19,6 +20,7 @@
 #include <rtabmap/utilite/UConversion.h>
 #include <rtabmap/utilite/ULogger.h>
 #include "TestUtils.h"
+#include <opencv2/imgproc.hpp>
 #include <cstdio>
 #include <string>
 #include <vector>
@@ -4438,6 +4440,65 @@ TEST_F(MemoryFixture, ComputeIcpTransformMultiRejectsScansTooFarApart)
 }
 
 // ---------------------------------------------------------------------------
+// Memory::computeTransform(): reloading a saved node's data for a registration.
+//
+// Once a node is saved to the database, its compressed data is dropped from RAM,
+// and a registration that needs it (here ICP) reloads it with getNodeData(),
+// which doesn't load global descriptors. The node must keep them: a later
+// Signature::compareTo() asserts that both nodes have the same number of global
+// descriptors (same issue as #1686 in copyData()).
+// ---------------------------------------------------------------------------
+
+TEST(MemoryTest, ComputeTransformKeepsGlobalDescriptorsWhenReloadingData)
+{
+	const std::string dbPath = uniqueDbPath();
+	{
+		Memory memory(icpMemoryParams());
+		ASSERT_TRUE(memory.init(dbPath));
+
+		const cv::Mat image(8, 8, CV_8UC1, cv::Scalar(128));
+		const cv::Mat covariance = cv::Mat::eye(6, 6, CV_64FC1) * 0.01;
+		const Transform motion(0.10f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f);
+		const LaserScan corner = memoryCorner2D();
+		const cv::Mat descriptor(1, 4, CV_32FC1, cv::Scalar(0.5f)); // normalized
+
+		SensorData first(image);
+		first.setLaserScan(corner);
+		first.addGlobalDescriptor(GlobalDescriptor(1, descriptor));
+		ASSERT_TRUE(memory.update(first, Transform::getIdentity(), covariance));
+		const int oldId = memory.getLastSignatureId();
+
+		SensorData second(image);
+		second.setLaserScan(util3d::transformLaserScan(corner, motion.inverse()));
+		second.addGlobalDescriptor(GlobalDescriptor(1, descriptor));
+		ASSERT_TRUE(memory.update(second, motion, covariance));
+		const int newId = memory.getLastSignatureId();
+
+		// As Rtabmap::process() does after adding a node, with a database on disk.
+		memory.saveLocationData(oldId);
+		memory.emptyTrash();
+		memory.joinTrashThread(); // emptyTrash() is async; wait for the DB write
+		ASSERT_TRUE(memory.getSignature(oldId)->isSaved());
+		ASSERT_TRUE(memory.getSignature(oldId)->sensorData().laserScanCompressed().isEmpty());
+		ASSERT_EQ(memory.getSignature(oldId)->sensorData().globalDescriptors().size(), 1u);
+
+		RegistrationInfo info;
+		memory.computeTransform(oldId, newId, motion, &info);
+
+		const Signature * oldS = memory.getSignature(oldId);
+		const Signature * newS = memory.getSignature(newId);
+		ASSERT_NE(oldS, nullptr);
+		ASSERT_NE(newS, nullptr);
+		EXPECT_FALSE(oldS->sensorData().laserScanCompressed().isEmpty()); // reloaded
+		EXPECT_EQ(oldS->sensorData().globalDescriptors().size(), 1u);
+		EXPECT_NO_THROW(newS->compareTo(*oldS));
+
+		memory.close(false);
+	}
+	UFile::erase(dbPath);
+}
+
+// ---------------------------------------------------------------------------
 // createSignature() reuses the caller's compressed blob instead of
 // re-compressing, but only while the pixels it would store are provably the
 // ones that blob already encodes. Two separate mechanisms keep that true, and
@@ -4680,4 +4741,277 @@ TEST(MemoryTest, CreateSignatureRecompressesStereoPairAfterRectification)
 			<< "stored left image still holds the unrectified pixels";
 	EXPECT_GT(cv::countNonZero(uncompressImage(stored.depthOrRightCompressed()) != right), 0)
 			<< "stored right image still holds the unrectified pixels";
+}
+
+// ---------------------------------------------------------------------------
+// Mem/DepthCompressionFormat with inverse depth (".rvl:max:q"), which databases
+// older than 0.24 cannot hold: rtabmap 0.23 would still open them (e.g., created
+// with Db/TargetVersion=0.23.0) but could not decode their depth images.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+enum DepthInput
+{
+	kRawDepth,
+	kCompressedDepthWithRaw,   // e.g., received from ROS and decoded
+	kCompressedDepthOnly       // raw depth not needed (no features extracted here)
+};
+
+struct InverseDepthCase
+{
+	const char * targetVersion;
+	DepthInput input;
+	const char * depthCompressionFormat;
+	bool parallelCompression;
+	const char * expectedFormat;
+};
+
+class MemoryInverseDepthTest : public ::testing::TestWithParam<InverseDepthCase> {};
+
+} // namespace
+
+TEST_P(MemoryInverseDepthTest, StoredDepthFormatFollowsDatabaseVersion)
+{
+	const InverseDepthCase & cs = GetParam();
+	ParametersMap params = defaultMemoryParams();
+	params[Parameters::kMemBinDataKept()] = "true";
+	params[Parameters::kMemDepthCompressionFormat()] = cs.depthCompressionFormat;
+	params[Parameters::kMemCompressionParallelized()] = cs.parallelCompression ? "true" : "false";
+	params[Parameters::kDbTargetVersion()] = cs.targetVersion;
+	Memory memory(params);
+	const std::string dbPath = uniqueDbPath();
+	ASSERT_TRUE(memory.init(dbPath, true, params));
+
+	const cv::Mat rgb(16, 16, CV_8UC3, cv::Scalar(10, 20, 30));
+	cv::Mat depth(16, 16, CV_32FC1);
+	cv::randu(depth, 0.5f, 8.0f);
+	const CameraModel model(10.0, 10.0, 8.0, 8.0, CameraModel::opticalRotation());
+	SensorData data;
+	if(cs.input == kRawDepth)
+	{
+		data = SensorData(rgb, depth, model);
+	}
+	else
+	{
+		data = SensorData(compressImage2(rgb, ".png"), compressImage2(depth, ".png:10:100"), model);
+		if(cs.input == kCompressedDepthWithRaw)
+		{
+			data.uncompressData();
+			ASSERT_FALSE(data.depthRaw().empty());
+		}
+	}
+
+	ASSERT_TRUE(memory.update(data, Transform(0, 0, 0, 0, 0, 0), cv::Mat::eye(6, 6, CV_64FC1) * 0.01));
+	const Signature * s = memory.getSignature(memory.getLastSignatureId());
+	ASSERT_NE(s, nullptr);
+	const cv::Mat & stored = s->sensorData().depthOrRightCompressed();
+	ASSERT_FALSE(stored.empty());
+	EXPECT_EQ(compressedDepthFormat(stored), cs.expectedFormat);
+
+	const cv::Mat restored = uncompressImage(stored);
+	ASSERT_EQ(restored.type(), CV_32FC1);
+	ASSERT_EQ(restored.size(), depth.size());
+	EXPECT_LT(cv::norm(restored, depth, cv::NORM_INF), 0.01);
+
+	memory.close(false);
+	UFile::erase(dbPath);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+		DatabaseVersions,
+		MemoryInverseDepthTest,
+		::testing::Values(
+				InverseDepthCase{"", kRawDepth, ".rvl:10:100", true, ".rvl:10:100"},
+				InverseDepthCase{"", kRawDepth, ".rvl:10:100", false, ".rvl:10:100"},
+				InverseDepthCase{"", kCompressedDepthWithRaw, ".rvl:10:100", true, ".png:10:100"},  // reused as is
+				InverseDepthCase{"", kCompressedDepthOnly, ".rvl:10:100", true, ".png:10:100"},     // reused as is
+				InverseDepthCase{"0.23.0", kRawDepth, ".rvl:10:100", true, ".png"},                // legacy 32FC1 format
+				InverseDepthCase{"0.23.0", kCompressedDepthWithRaw, ".rvl:10:100", true, ".png"},  // re-compressed
+				InverseDepthCase{"0.23.0", kCompressedDepthOnly, ".rvl:10:100", true, ".png"},     // decompressed, re-compressed
+				InverseDepthCase{"", kRawDepth, ".rvl", true, ".png"},                             // RVL is 16UC1 only: legacy
+				InverseDepthCase{"", kRawDepth, ".jpg", true, ".png"}));                           // invalid: default ".rvl"
+
+// Compressed images that Memory rectifies (Rtabmap/ImagesAlreadyRectified=false) are
+// decoded for it, even when nothing else needs them (no feature extraction here): they
+// are stored rectified, not as received.
+TEST(MemoryTest, DecodesCompressedImagesToRectifyThem)
+{
+	for(bool alreadyRectified : {true, false})
+	{
+		SCOPED_TRACE(alreadyRectified ? "already rectified" : "rectified by Memory");
+		ParametersMap params = defaultMemoryParams();
+		params[Parameters::kMemBinDataKept()] = "true";
+		params[Parameters::kRtabmapImagesAlreadyRectified()] = alreadyRectified ? "true" : "false";
+		Memory memory(params);
+		ASSERT_TRUE(memory.init(""));
+
+		cv::Mat rgb(48, 64, CV_8UC3);
+		cv::randu(rgb, 0, 255);
+		const cv::Mat K = (cv::Mat_<double>(3, 3) << 50, 0, 32, 0, 50, 24, 0, 0, 1);
+		const cv::Mat D = (cv::Mat_<double>(1, 5) << -0.3, 0.1, 0, 0, 0);
+		const cv::Mat R = cv::Mat::eye(3, 3, CV_64FC1);
+		const cv::Mat P = (cv::Mat_<double>(3, 4) << 50, 0, 32, 0, 0, 50, 24, 0, 0, 0, 1, 0);
+		const CameraModel model("cam", cv::Size(64, 48), K, D, R, P, CameraModel::opticalRotation());
+		ASSERT_TRUE(model.isValidForRectification());
+		const cv::Mat compressed = compressImage2(rgb, ".png");
+		SensorData data(compressed, cv::Mat(), model);
+
+		ASSERT_TRUE(memory.update(data, Transform(0, 0, 0, 0, 0, 0), cv::Mat::eye(6, 6, CV_64FC1) * 0.01));
+		const Signature * s = memory.getSignature(memory.getLastSignatureId());
+		ASSERT_NE(s, nullptr);
+		const cv::Mat & stored = s->sensorData().imageCompressed();
+		ASSERT_FALSE(stored.empty());
+		const bool sameBytes = stored.total() == compressed.total() &&
+				memcmp(stored.data, compressed.data, compressed.total()) == 0;
+		EXPECT_EQ(sameBytes, alreadyRectified);
+	}
+}
+
+// Mem/StereoFromMotion on RGB-only input with a camera mounted away from the
+// base frame origin: the words3D triangulated from odometry are scaled by the
+// odometry motion, but the camera local transform translation (lever arm) must
+// not be scaled with them.
+// The scene is made of fronto-parallel textured horizontal bands at different
+// depths (a single plane is degenerate for the five-point algorithm): moving
+// the camera by +tx along its x axis shifts each band left by fx*tx/Z pixels,
+// without occlusions between the bands.
+TEST(MemoryTest, StereoFromMotionWords3DWithCameraLeverArm)
+{
+	const float fx = 300.0f;
+	const float cx = 160.0f;
+	const float cy = 120.0f;
+	const float tx = 0.6f;
+	const int bandHeight = 60;
+	const int bandShifts[4] = {100, 24, 60, 40}; // pixels, depths of 1.8, 7.5, 3 and 4.5 m
+	const int maxShift = 100;
+
+	cv::Mat scene(240, 320 + maxShift, CV_8UC1);
+	cv::theRNG().state = 42;
+	cv::randu(scene, cv::Scalar(0), cv::Scalar(255));
+	cv::GaussianBlur(scene, scene, cv::Size(5, 5), 1.5);
+	const cv::Mat imageA = scene(cv::Rect(0, 0, 320, 240)).clone();
+	cv::Mat imageB(240, 320, CV_8UC1);
+	for(int b=0; b<4; ++b)
+	{
+		scene(cv::Rect(bandShifts[b], b*bandHeight, 320, bandHeight)).copyTo(imageB(cv::Rect(0, b*bandHeight, 320, bandHeight)));
+	}
+
+	// Camera looking forward, 0.3 m in front, 0.1 m to the right and 0.5 m above base origin
+	const Transform localTransform = Transform(0.3f, -0.1f, 0.5f, 0, 0, 0) * CameraModel::opticalRotation();
+	const CameraModel model(fx, fx, cx, cy, localTransform, 0, cv::Size(320, 240));
+
+	ParametersMap params;
+	params[Parameters::kMemStereoFromMotion()] = "true";
+	params[Parameters::kMemRehearsalSimilarity()] = "1.0"; // keep both nodes
+	params[Parameters::kMemBadSignaturesIgnored()] = "false";
+	// Deterministic matching (kd-trees are randomized)
+	params[Parameters::kKpNNStrategy()] = "0"; // FLANN Linear
+	params[Parameters::kVisCorNNType()] = "0"; // FLANN Linear
+	Memory memory(params);
+	ASSERT_TRUE(memory.init(""));
+
+	// camera x axis is base -y axis
+	const cv::Mat covariance = cv::Mat::eye(6, 6, CV_64FC1) * 0.01;
+	ASSERT_TRUE(memory.update(SensorData(imageA, model), Transform::getIdentity(), covariance));
+	ASSERT_TRUE(memory.update(SensorData(imageB, model), Transform(0, -tx, 0, 0, 0, 0), covariance));
+
+	const Signature * s = memory.getSignature(memory.getLastSignatureId());
+	ASSERT_NE(s, nullptr);
+	ASSERT_GT(s->getWords().size(), 8u);
+	ASSERT_EQ(s->getWords3().size(), s->getWordsKpts().size());
+
+	int triangulated = 0;
+	for(std::multimap<int, int>::const_iterator iter=s->getWords().begin(); iter!=s->getWords().end(); ++iter)
+	{
+		const cv::Point3f & word3 = s->getWords3()[iter->second];
+		const cv::Point2f & kpt = s->getWordsKpts()[iter->second].pt;
+		const int band = int(kpt.y) / bandHeight;
+		if(!util3d::isFinite(word3) ||
+		   int(kpt.y) % bandHeight < 8 || int(kpt.y) % bandHeight >= bandHeight - 8) // ignore band borders
+		{
+			continue;
+		}
+		++triangulated;
+		// words3D are in base frame of the node
+		const cv::Point3f pt = util3d::transformPoint(word3, localTransform.inverse());
+		ASSERT_GT(pt.z, 0.0f) << "word " << iter->first << " kpt " << iter->second;
+		EXPECT_NEAR(fx * pt.x / pt.z + cx, kpt.x, 2.0f) << "word " << iter->first << " kpt " << iter->second;
+		EXPECT_NEAR(fx * pt.y / pt.z + cy, kpt.y, 2.0f) << "word " << iter->first << " kpt " << iter->second;
+		const float depth = fx * tx / bandShifts[band];
+		EXPECT_NEAR(pt.z, depth, 0.1f * depth) << "word " << iter->first << " kpt " << iter->second;
+	}
+	EXPECT_GT(triangulated, 20);
+}
+
+// Mem/StereoFromMotion on RGB-only input: words3D triangulated from odometry
+// must be parallel to wordsKpts (words3D[kptIdx] is the 3D point of
+// wordsKpts[kptIdx]), like every consumer of Signature::getWords3() assumes.
+// The scene is made of fronto-parallel textured horizontal bands at different
+// depths (a single plane is degenerate for the five-point algorithm): moving
+// the camera by +tx along its x axis shifts each band left by fx*tx/Z pixels,
+// without occlusions between the bands.
+TEST(MemoryTest, StereoFromMotionWords3DAreIndexedByKeypoint)
+{
+	const float fx = 300.0f;
+	const float cx = 160.0f;
+	const float cy = 120.0f;
+	const float tx = 0.6f;
+	const int bandHeight = 60;
+	const int bandShifts[4] = {100, 24, 60, 40}; // pixels, depths of 1.8, 7.5, 3 and 4.5 m
+	const int maxShift = 100;
+
+	cv::Mat scene(240, 320 + maxShift, CV_8UC1);
+	cv::theRNG().state = 42;
+	cv::randu(scene, cv::Scalar(0), cv::Scalar(255));
+	cv::GaussianBlur(scene, scene, cv::Size(5, 5), 1.5);
+	const cv::Mat imageA = scene(cv::Rect(0, 0, 320, 240)).clone();
+	cv::Mat imageB(240, 320, CV_8UC1);
+	for(int b=0; b<4; ++b)
+	{
+		scene(cv::Rect(bandShifts[b], b*bandHeight, 320, bandHeight)).copyTo(imageB(cv::Rect(0, b*bandHeight, 320, bandHeight)));
+	}
+
+	// Identity local transform: base frame == optical frame
+	const CameraModel model(fx, fx, cx, cy, Transform::getIdentity(), 0, cv::Size(320, 240));
+
+	ParametersMap params;
+	params[Parameters::kMemStereoFromMotion()] = "true";
+	params[Parameters::kMemRehearsalSimilarity()] = "1.0"; // keep both nodes
+	params[Parameters::kMemBadSignaturesIgnored()] = "false";
+	// Deterministic matching (kd-trees are randomized)
+	params[Parameters::kKpNNStrategy()] = "0"; // FLANN Linear
+	params[Parameters::kVisCorNNType()] = "0"; // FLANN Linear
+	Memory memory(params);
+	ASSERT_TRUE(memory.init(""));
+
+	const cv::Mat covariance = cv::Mat::eye(6, 6, CV_64FC1) * 0.01;
+	ASSERT_TRUE(memory.update(SensorData(imageA, model), Transform::getIdentity(), covariance));
+	ASSERT_TRUE(memory.update(SensorData(imageB, model), Transform(tx, 0, 0, 0, 0, 0), covariance));
+
+	const Signature * s = memory.getSignature(memory.getLastSignatureId());
+	ASSERT_NE(s, nullptr);
+	ASSERT_GT(s->getWords().size(), 8u);
+	ASSERT_EQ(s->getWords3().size(), s->getWordsKpts().size());
+
+	int triangulated = 0;
+	for(std::multimap<int, int>::const_iterator iter=s->getWords().begin(); iter!=s->getWords().end(); ++iter)
+	{
+		const cv::Point3f & pt = s->getWords3()[iter->second];
+		const cv::Point2f & kpt = s->getWordsKpts()[iter->second].pt;
+		const int band = int(kpt.y) / bandHeight;
+		if(!util3d::isFinite(pt) ||
+		   int(kpt.y) % bandHeight < 8 || int(kpt.y) % bandHeight >= bandHeight - 8) // ignore band borders
+		{
+			continue;
+		}
+		++triangulated;
+		// words3D are in base frame of the node, here == camera frame
+		ASSERT_GT(pt.z, 0.0f) << "word " << iter->first << " kpt " << iter->second;
+		EXPECT_NEAR(fx * pt.x / pt.z + cx, kpt.x, 2.0f) << "word " << iter->first << " kpt " << iter->second;
+		EXPECT_NEAR(fx * pt.y / pt.z + cy, kpt.y, 2.0f) << "word " << iter->first << " kpt " << iter->second;
+		const float depth = fx * tx / bandShifts[band];
+		EXPECT_NEAR(pt.z, depth, 0.1f * depth) << "word " << iter->first << " kpt " << iter->second;
+	}
+	EXPECT_GT(triangulated, 20);
 }
