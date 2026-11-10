@@ -75,6 +75,11 @@ extern "C" {
 #include "apriltag/tag25h9.h"
 #include "apriltag/tag36h10.h"
 #include "apriltag/tag36h11.h"
+#include "apriltag/tagStandard41h12.h"
+#include "apriltag/tagStandard52h13.h"
+#include "apriltag/tagCircle21h7.h"
+#include "apriltag/tagCircle49h12.h"
+#include "apriltag/tagCustom48h12.h"
 }
 
 #if !((CV_MAJOR_VERSION > 4 || (CV_MAJOR_VERSION==4 && CV_MINOR_VERSION >=7)) && defined(HAVE_OPENCV_OBJDETECT)) && !defined(HAVE_OPENCV_ARUCO)
@@ -132,6 +137,21 @@ apriltag_family_t * createAprilTagPredefinedDictionary(int opencvArucoDictionary
 		APRILTAG_CASE(25, 9)
 		APRILTAG_CASE(36, 10)
 		APRILTAG_CASE(36, 11)
+		case MarkerDetector::kDictAprilTagStandard41h12:
+			af = tagStandard41h12_create();
+			break;
+		case MarkerDetector::kDictAprilTagStandard52h13:
+			af = tagStandard52h13_create();
+			break;
+		case MarkerDetector::kDictAprilTagCircle21h7:
+			af = tagCircle21h7_create();
+			break;
+		case MarkerDetector::kDictAprilTagCircle49h12:
+			af = tagCircle49h12_create();
+			break;
+		case MarkerDetector::kDictAprilTagCustom48h12:
+			af = tagCustom48h12_create();
+			break;
 #ifdef RTABMAP_APRILTAG_WITH_ARUCO
 		ARUCO_CASE(4, 50)
 		ARUCO_CASE(4, 100)
@@ -169,6 +189,11 @@ void destroyAprilTagDictionary(apriltag_family_t * dictionary)
 	else if(strcmp(name, "tag25h9") == 0)          tag25h9_destroy(dictionary);
 	else if(strcmp(name, "tag36h10") == 0)         tag36h10_destroy(dictionary);
 	else if(strcmp(name, "tag36h11") == 0)         tag36h11_destroy(dictionary);
+	else if(strcmp(name, "tagStandard41h12") == 0) tagStandard41h12_destroy(dictionary);
+	else if(strcmp(name, "tagStandard52h13") == 0) tagStandard52h13_destroy(dictionary);
+	else if(strcmp(name, "tagCircle21h7") == 0)    tagCircle21h7_destroy(dictionary);
+	else if(strcmp(name, "tagCircle49h12") == 0)   tagCircle49h12_destroy(dictionary);
+	else if(strcmp(name, "tagCustom48h12") == 0)   tagCustom48h12_destroy(dictionary);
 #ifdef RTABMAP_APRILTAG_WITH_ARUCO
 	else if(strcmp(name, "tagAruco4x4_50") == 0)   tagAruco4x4_50_destroy(dictionary);
 	else if(strcmp(name, "tagAruco4x4_100") == 0)  tagAruco4x4_100_destroy(dictionary);
@@ -193,7 +218,31 @@ void destroyAprilTagDictionary(apriltag_family_t * dictionary)
 		UFATAL("AprilTag: Didn't find the right destructor for dictionary \"%s\"", name);
 	}
 }
+
+#ifndef RTABMAP_APRILTAG_COMPACT_DECODER
+// AprilTag library releases up to 3.4.5 decode tags with a hash table holding
+// every code of the family combined with every set of up to maxHamming flipped
+// bits, over-allocated 3 times, at 16 bytes per entry (see quick_decode_init()
+// in apriltag.c). With large families it gets huge: about 6.3 GB for
+// tagStandard52h13 with 2 bits corrected. Newer versions (see
+// RTABMAP_APRILTAG_COMPACT_DECODER) use a few hundred kB whatever maxHamming.
+const uint64_t kLegacyAprilTagDecodeTableMaxBytes = 256ull*1024ull*1024ull;
+uint64_t legacyAprilTagDecodeTableBytes(const apriltag_family_t * family, int maxHamming)
+{
+	const uint64_t nbits = family->nbits;
+	uint64_t entriesPerCode = 1;
+	if(maxHamming >= 1) entriesPerCode += nbits;
+	if(maxHamming >= 2) entriesPerCode += nbits * (nbits-1);
+	if(maxHamming >= 3) entriesPerCode += nbits * (nbits-1) * (nbits-2);
+	return uint64_t(family->ncodes) * entriesPerCode * 3 * 16;
+}
 #endif
+#endif
+
+bool MarkerDetector::isAprilTagLibOnlyDictionary(int dictionary)
+{
+	return dictionary >= kDictAprilTagStandard41h12 && dictionary <= kDictAprilTagCustom48h12;
+}
 
 MarkerDetector::MarkerDetector(const ParametersMap & parameters) :
 	strategy_((Strategy)Parameters::defaultMarkerStrategy()),
@@ -203,6 +252,7 @@ MarkerDetector::MarkerDetector(const ParametersMap & parameters) :
 	minRange_(Parameters::defaultMarkerMinRange()),
 	dictionaryId_(Parameters::defaultMarkerDictionary()),
 	aprilTagUpright_(Parameters::defaultMarkerAprilTagUpright()),
+	aprilTagMaxHamming_(Parameters::defaultMarkerAprilTagMaxHamming()),
 	apriltagLibDetector_(NULL),
 	apriltagLibFamily_(NULL)
 {
@@ -250,7 +300,44 @@ void MarkerDetector::parseParameters(const ParametersMap & parameters)
 	Parameters::parse(parameters, Parameters::kMarkerMinRange(), minRange_);
 	Parameters::parse(parameters, Parameters::kMarkerDictionary(), dictionaryId_);
 	Parameters::parse(parameters, Parameters::kMarkerAprilTagUpright(), aprilTagUpright_);
-	
+	Parameters::parse(parameters, Parameters::kMarkerAprilTagMaxHamming(), aprilTagMaxHamming_);
+	if(aprilTagMaxHamming_ < 0 || aprilTagMaxHamming_ > 3)
+	{
+		UWARN("%s=%d is out of range [0,3] (AprilTag library limit), setting it to %d.",
+				Parameters::kMarkerAprilTagMaxHamming().c_str(),
+				aprilTagMaxHamming_,
+				aprilTagMaxHamming_<0?0:3);
+		aprilTagMaxHamming_ = aprilTagMaxHamming_<0?0:3;
+	}
+
+	if(dictionaryId_ < 0 || dictionaryId_ > kDictAprilTagCustom48h12)
+	{
+		UERROR("Invalid %s=%d, setting it to default (%d).",
+				Parameters::kMarkerDictionary().c_str(),
+				dictionaryId_,
+				Parameters::defaultMarkerDictionary());
+		dictionaryId_ = Parameters::defaultMarkerDictionary();
+	}
+	if(isAprilTagLibOnlyDictionary(dictionaryId_) && strategy_ == kStrategyOpencv)
+	{
+#ifdef RTABMAP_APRILTAG
+		UWARN("%s=%d is only supported by the AprilTag library, setting %s to %d.",
+				Parameters::kMarkerDictionary().c_str(),
+				dictionaryId_,
+				Parameters::kMarkerStrategy().c_str(),
+				(int)kStrategyApriltag);
+		strategy_ = kStrategyApriltag;
+#else
+		UERROR("%s=%d is only supported by the AprilTag library, but RTAB-Map is not "
+				"built with it. Setting %s to default (%d).",
+				Parameters::kMarkerDictionary().c_str(),
+				dictionaryId_,
+				Parameters::kMarkerDictionary().c_str(),
+				Parameters::defaultMarkerDictionary());
+		dictionaryId_ = Parameters::defaultMarkerDictionary();
+#endif
+	}
+
 	if(parameters.find(Parameters::kMarkerLengths()) != parameters.end())
 	{
 		markerLengths_.clear();
@@ -373,19 +460,24 @@ void MarkerDetector::parseParameters(const ParametersMap & parameters)
 	}
 #endif
 
+	// Don't ask OpenCV for the AprilTag library only dictionaries, which are not
+	// in its enum (the strategy is the AprilTag library anyway, see above).
+	if(!isAprilTagLibOnlyDictionary(dictionaryId_))
+	{
 #if CV_MAJOR_VERSION > 4 || (CV_MAJOR_VERSION == 4 && CV_MINOR_VERSION >= 7)
-    dictionary_.reset(new cv::aruco::Dictionary());
-    *dictionary_ = cv::aruco::getPredefinedDictionary(cv::aruco::PredefinedDictionaryType(dictionaryId_));
+		dictionary_.reset(new cv::aruco::Dictionary());
+		*dictionary_ = cv::aruco::getPredefinedDictionary(cv::aruco::PredefinedDictionaryType(dictionaryId_));
 #elif CV_MAJOR_VERSION > 3 || (CV_MAJOR_VERSION == 3 && CV_MINOR_VERSION >=2)
-	dictionary_ = cv::aruco::getPredefinedDictionary(cv::aruco::PredefinedDictionaryType(dictionaryId_));
+		dictionary_ = cv::aruco::getPredefinedDictionary(cv::aruco::PredefinedDictionaryType(dictionaryId_));
 #else
-	dictionary_.reset(new cv::aruco::Dictionary());
-	*dictionary_ = cv::aruco::getPredefinedDictionary(cv::aruco::PredefinedDictionaryType(dictionaryId_));
+		dictionary_.reset(new cv::aruco::Dictionary());
+		*dictionary_ = cv::aruco::getPredefinedDictionary(cv::aruco::PredefinedDictionaryType(dictionaryId_));
 #endif
 
 #if CV_MAJOR_VERSION > 4 || (CV_MAJOR_VERSION==4 && CV_MINOR_VERSION >=7)
-	arucoDetector_.reset(new cv::aruco::ArucoDetector(*dictionary_, *detectorParams_));
+		arucoDetector_.reset(new cv::aruco::ArucoDetector(*dictionary_, *detectorParams_));
 #endif
+	}
 
 #else
 	if(strategy_ == 0)
@@ -421,7 +513,8 @@ void MarkerDetector::parseParameters(const ParametersMap & parameters)
 		Parameters::parse(parameters, Parameters::kMarkerAprilTagDecodeSharpening(), ((apriltag_detector_t*)apriltagLibDetector_)->decode_sharpening);
 		Parameters::parse(parameters, Parameters::kMarkerAprilTagDebug(), ((apriltag_detector_t*)apriltagLibDetector_)->debug);
 
-		cv::aruco::PredefinedDictionaryType dictFamily = cv::aruco::PredefinedDictionaryType(dictionaryId_);
+		// int: the AprilTag library only dictionaries are not in OpenCV's enum
+		int dictFamily = dictionaryId_;
 #ifndef RTABMAP_APRILTAG_WITH_ARUCO
 		if((dictFamily >= cv::aruco::DICT_4X4_50 && dictFamily < cv::aruco::DICT_APRILTAG_16h5) || dictFamily==cv::aruco::DICT_ARUCO_MIP_36h12)
 		{
@@ -431,7 +524,7 @@ void MarkerDetector::parseParameters(const ParametersMap & parameters)
 					Parameters::kMarkerDictionary().c_str(),
 					cv::aruco::DICT_APRILTAG_36h11);
 			dictionaryId_ = cv::aruco::DICT_APRILTAG_36h11;
-			dictFamily = cv::aruco::PredefinedDictionaryType(dictionaryId_);
+			dictFamily = dictionaryId_;
 		}
 #endif
 		if(dictFamily == cv::aruco::DICT_ARUCO_ORIGINAL)
@@ -442,15 +535,39 @@ void MarkerDetector::parseParameters(const ParametersMap & parameters)
 					Parameters::kMarkerDictionary().c_str(),
 					cv::aruco::DICT_APRILTAG_36h11);
 			dictionaryId_ = cv::aruco::DICT_APRILTAG_36h11;
-			dictFamily = cv::aruco::PredefinedDictionaryType(dictionaryId_);
+			dictFamily = dictionaryId_;
 		}
 		apriltagLibFamily_  = createAprilTagPredefinedDictionary(dictFamily);
 		UASSERT_MSG(apriltagLibFamily_ != NULL, uFormat("AprilTag library cannot be used with dictionary type %d", (int)dictionaryId_).c_str());
-		// Correct up to 2 bit errors (AprilTag's default), but not more than the
-		// family can unambiguously correct (half its minimum Hamming distance),
-		// otherwise markers can be decoded with a wrong id (e.g., ArUco 4x4 with h=2).
+		// Correct up to MarkerAprilTag/MaxHamming bit errors (2 by default, like
+		// AprilTag), but not more than the family can unambiguously correct (half
+		// its minimum Hamming distance), otherwise markers can be decoded with a
+		// wrong id (e.g., ArUco 4x4 with h=2).
 		apriltag_family_t * family = (apriltag_family_t*)apriltagLibFamily_;
-		int maxBitsCorrected = std::min(2, std::max(0, ((int)family->h-1)/2));
+		int maxBitsCorrected = std::min(aprilTagMaxHamming_, std::max(0, ((int)family->h-1)/2));
+#ifndef RTABMAP_APRILTAG_COMPACT_DECODER
+		// Don't let this AprilTag library version allocate GBs for its decoding table
+		const int requestedBitsCorrected = maxBitsCorrected;
+		while(maxBitsCorrected > 0 && legacyAprilTagDecodeTableBytes(family, maxBitsCorrected) > kLegacyAprilTagDecodeTableMaxBytes)
+		{
+			--maxBitsCorrected;
+		}
+		if(maxBitsCorrected < requestedBitsCorrected)
+		{
+			UWARN("AprilTag family %s: correcting up to %d bit errors instead of %d (%s=%d), "
+					"as the decoding table of this AprilTag library version would take %.1f GB "
+					"(%.0f MB with %d). Newer AprilTag library versions (with apriltag_detector_copy(), "
+					"e.g., built from source since March 2026) don't have this limitation.",
+					family->name,
+					maxBitsCorrected,
+					requestedBitsCorrected,
+					Parameters::kMarkerAprilTagMaxHamming().c_str(),
+					aprilTagMaxHamming_,
+					double(legacyAprilTagDecodeTableBytes(family, requestedBitsCorrected))/1e9,
+					double(legacyAprilTagDecodeTableBytes(family, maxBitsCorrected))/1e6,
+					maxBitsCorrected);
+		}
+#endif
 		UDEBUG("AprilTag family %s (min Hamming distance=%d): correcting up to %d bit errors", family->name, (int)family->h, maxBitsCorrected);
 		errno = 0;
 		apriltag_detector_add_family_bits(((apriltag_detector_t*)apriltagLibDetector_), family, maxBitsCorrected);

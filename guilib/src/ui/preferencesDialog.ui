@@ -15891,6 +15891,31 @@ With &lt;0, the length is estimated once for each unique marker, then re-used fo
                           <string>ARUCO_MIP_36h12</string>
                          </property>
                         </item>
+                        <item>
+                         <property name="text">
+                          <string>APRILTAG_Standard41h12</string>
+                         </property>
+                        </item>
+                        <item>
+                         <property name="text">
+                          <string>APRILTAG_Standard52h13</string>
+                         </property>
+                        </item>
+                        <item>
+                         <property name="text">
+                          <string>APRILTAG_Circle21h7</string>
+                         </property>
+                        </item>
+                        <item>
+                         <property name="text">
+                          <string>APRILTAG_Circle49h12</string>
+                         </property>
+                        </item>
+                        <item>
+                         <property name="text">
+                          <string>APRILTAG_Custom48h12</string>
+                         </property>
+                        </item>
                        </widget>
                       </item>
                       <item row="2" column="1">
@@ -16390,6 +16415,32 @@ With &lt;0, the length is estimated once for each unique marker, then re-used fo
                              </property>
                              <property name="value">
                               <double>2.000000000000000</double>
+                             </property>
+                            </widget>
+                           </item>
+                           <item row="6" column="0">
+                            <widget class="QSpinBox" name="apriltag_max_hamming">
+                             <property name="minimum">
+                              <number>0</number>
+                             </property>
+                             <property name="maximum">
+                              <number>3</number>
+                             </property>
+                             <property name="value">
+                              <number>2</number>
+                             </property>
+                            </widget>
+                           </item>
+                           <item row="6" column="1">
+                            <widget class="QLabel" name="label_apriltag_max_hamming">
+                             <property name="text">
+                              <string>max_hamming: Maximum number of bit errors corrected when decoding a marker (0-3), also limited to what the dictionary can correct unambiguously. Higher values detect more damaged markers, but also give more false detections. AprilTag library releases up to 3.4.5 build a decoding table growing quickly with this value (e.g., 6.3 GB for APRILTAG_Standard52h13 with 2): with them, it is reduced as needed to keep that table under 256 MB.</string>
+                             </property>
+                             <property name="wordWrap">
+                              <bool>true</bool>
+                             </property>
+                             <property name="textInteractionFlags">
+                              <set>Qt::LinksAccessibleByMouse|Qt::TextSelectableByMouse</set>
                              </property>
                             </widget>
                            </item>

@@ -63,7 +63,19 @@ public:
     kStrategyOpencv,
     kStrategyApriltag
   };
-    
+
+  // Marker/Dictionary values of the AprilTag families that only the AprilTag
+  // library can detect (Marker/Strategy=1), following OpenCV's predefined
+  // dictionaries (0-21).
+  enum AprilTagLibDictionary {
+    kDictAprilTagStandard41h12 = 22,
+    kDictAprilTagStandard52h13 = 23,
+    kDictAprilTagCircle21h7 = 24,
+    kDictAprilTagCircle49h12 = 25,
+    kDictAprilTagCustom48h12 = 26
+  };
+  static bool isAprilTagLibOnlyDictionary(int dictionary);
+
 public:
 	MarkerDetector(const ParametersMap & parameters = ParametersMap());
 	virtual ~MarkerDetector();
@@ -90,6 +102,7 @@ private:
 	float minRange_;
 	int dictionaryId_;
 	int aprilTagUpright_;
+	int aprilTagMaxHamming_;
 #if ((CV_MAJOR_VERSION > 4 || (CV_MAJOR_VERSION==4 && CV_MINOR_VERSION >=7)) && defined(HAVE_OPENCV_OBJDETECT)) || defined(HAVE_OPENCV_ARUCO)
 #if CV_MAJOR_VERSION > 4 || (CV_MAJOR_VERSION==4 && CV_MINOR_VERSION >=7)
   cv::Ptr<cv::aruco::ArucoDetector> arucoDetector_;

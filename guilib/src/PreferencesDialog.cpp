@@ -114,6 +114,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include <opencv2/opencv_modules.hpp>
 #include <rtabmap/core/SensorCaptureThread.h>
+#include <rtabmap/core/MarkerDetector.h>
 #if CV_MAJOR_VERSION < 3
 #ifdef HAVE_OPENCV_GPU
   #include <opencv2/gpu/gpu.hpp>
@@ -1823,6 +1824,7 @@ PreferencesDialog::PreferencesDialog(QWidget * parent) :
 	_ui->apriltag_refine_edges->setObjectName(Parameters::kMarkerAprilTagRefineEdges().c_str());
 	_ui->apriltag_decode_sharpening->setObjectName(Parameters::kMarkerAprilTagDecodeSharpening().c_str());
 	_ui->apriltag_debug->setObjectName(Parameters::kMarkerAprilTagDebug().c_str());
+	_ui->apriltag_max_hamming->setObjectName(Parameters::kMarkerAprilTagMaxHamming().c_str());
 
 	// IMU filter
 	_ui->doubleSpinBox_imuFilterMadgwickGain->setObjectName(Parameters::kImuFilterMadgwickGain().c_str());
@@ -4063,6 +4065,12 @@ bool PreferencesDialog::validateForm()
 
 	if(_ui->MarkerStrategy->currentIndex() == 0)
 	{
+		if(MarkerDetector::isAprilTagLibOnlyDictionary(_ui->MarkerDictionary->currentIndex()))
+		{
+			QMessageBox::warning(this, tr("Parameter warning"),
+					tr("Opencv Strategy: cannot use selected dictionary (%1), it is only supported by the AprilTag strategy. Setting back to 0.").arg(_ui->MarkerDictionary->currentIndex()));
+			_ui->MarkerDictionary->setCurrentIndex(0);
+		}
 #if CV_MAJOR_VERSION < 3 || (CV_MAJOR_VERSION == 3 && (CV_MINOR_VERSION <4 || (CV_MINOR_VERSION ==4 && CV_SUBMINOR_VERSION<2)))
 		if(_ui->MarkerDictionary->currentIndex()>=17)
 		{
@@ -5742,7 +5750,7 @@ void PreferencesDialog::updateAvailableMarkerDictionaries()
 			_ui->MarkerDictionary->setItemData(i, 0, Qt::UserRole - 1); 
 		}
 		_ui->MarkerDictionary->setItemData(21, 0, Qt::UserRole - 1);
-		if(_ui->MarkerDictionary->currentIndex() < 17 || _ui->MarkerDictionary->currentIndex() > 20)
+		if(_ui->MarkerDictionary->currentIndex() < 17 || _ui->MarkerDictionary->currentIndex() == 21)
 		{
 			_ui->MarkerDictionary->setCurrentIndex(20); // 36h11 by default
 		}
@@ -5750,6 +5758,14 @@ void PreferencesDialog::updateAvailableMarkerDictionaries()
 	}
 	else //if(_ui->MarkerStrategy->currentIndex() == 0) // OpenCV Strategy is selected
 	{
+		// disable dictionaries only supported by the AprilTag library
+		for(int i=MarkerDetector::kDictAprilTagStandard41h12; i<=MarkerDetector::kDictAprilTagCustom48h12 && i<_ui->MarkerDictionary->count(); ++i) {
+			_ui->MarkerDictionary->setItemData(i, 0, Qt::UserRole - 1);
+		}
+		if(MarkerDetector::isAprilTagLibOnlyDictionary(_ui->MarkerDictionary->currentIndex()))
+		{
+			_ui->MarkerDictionary->setCurrentIndex(Parameters::defaultMarkerDictionary());
+		}
 		//if OpenCV < 3.4.2
 #if CV_MAJOR_VERSION < 3 || (CV_MAJOR_VERSION == 3 && (CV_MINOR_VERSION <4 || (CV_MINOR_VERSION ==4 && CV_SUBMINOR_VERSION<2)))
 		// disable all apriltag dictionaries

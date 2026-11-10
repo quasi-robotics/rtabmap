@@ -84,6 +84,12 @@ IF(GTSAM_FOUND)
 	target_link_libraries(test_corelib gtsam)
 ENDIF(GTSAM_FOUND)
 
+# test_markerdetector.cpp renders tags with the AprilTag library (rtabmap_core
+# links it PRIVATE).
+IF(apriltag_FOUND)
+	target_link_libraries(test_corelib apriltag::apriltag)
+ENDIF(apriltag_FOUND)
+
 # test_registrationicp.cpp includes corelib/src/icp/libpointmatcher.h directly
 # to test the LaserScan <-> DataPoints conversions, so it needs the library
 # itself (rtabmap_core links it PRIVATE and only re-exports its include dirs).

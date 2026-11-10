@@ -12,6 +12,18 @@
 #include <opencv2/geometry.hpp> // getPerspectiveTransform()
 #endif
 
+#ifdef RTABMAP_APRILTAG
+extern "C" {
+#include "apriltag/apriltag.h" // apriltag_to_image()
+#include "apriltag/tag36h11.h"
+#include "apriltag/tagStandard41h12.h"
+#include "apriltag/tagStandard52h13.h"
+#include "apriltag/tagCircle21h7.h"
+#include "apriltag/tagCircle49h12.h"
+#include "apriltag/tagCustom48h12.h"
+}
+#endif
+
 using namespace rtabmap;
 
 // The OpenCV strategy needs either the aruco contrib module or, since OpenCV 4.7,
@@ -764,5 +776,246 @@ TEST(MarkerDetectorTest, FirstCornerIsTopLeftOfRequestedUprightForAllStrategies)
 			}
 		}
 	}
+#endif
+}
+
+// ---------------------------------------------------------------------------
+// AprilTag families only supported by the AprilTag library (Marker/Dictionary
+// 22-26), and MarkerAprilTag/MaxHamming
+// ---------------------------------------------------------------------------
+namespace {
+
+#ifdef RTABMAP_APRILTAG
+struct AprilTagLibFamily
+{
+	int dictionary;
+	apriltag_family_t * (*create)();
+	void (*destroy)(apriltag_family_t *);
+};
+
+std::vector<AprilTagLibFamily> aprilTagLibOnlyFamilies()
+{
+	return {
+		{MarkerDetector::kDictAprilTagStandard41h12, tagStandard41h12_create, tagStandard41h12_destroy},
+		{MarkerDetector::kDictAprilTagStandard52h13, tagStandard52h13_create, tagStandard52h13_destroy},
+		{MarkerDetector::kDictAprilTagCircle21h7,    tagCircle21h7_create,    tagCircle21h7_destroy},
+		{MarkerDetector::kDictAprilTagCircle49h12,   tagCircle49h12_create,   tagCircle49h12_destroy},
+		{MarkerDetector::kDictAprilTagCustom48h12,   tagCustom48h12_create,   tagCustom48h12_destroy}};
+}
+
+const AprilTagLibFamily kTag36h11 = {20, tag36h11_create, tag36h11_destroy};
+
+int familyCodes(const AprilTagLibFamily & f)
+{
+	apriltag_family_t * family = f.create();
+	const int ncodes = family->ncodes;
+	f.destroy(family);
+	return ncodes;
+}
+
+// Renders marker `id` like the official AprilTag images (apriltag_to_image()),
+// with the bits `flippedBits` of its code inverted, at pose `cameraToMarker`
+// (optical frame, x right, y up and z out of the marker image). The tag size
+// (the edge between the white and black borders, where the AprilTag library
+// detects the corners, see its README) is 1 m.
+cv::Mat renderAprilTagLibMarkerAtPose(const AprilTagLibFamily & f, int id, const Transform & cameraToMarker, const std::vector<int> & flippedBits = std::vector<int>())
+{
+	apriltag_family_t * family = f.create();
+	// The codes are static data shared with the detector's family: flip a copy.
+	std::vector<uint64_t> codes(family->codes, family->codes + family->ncodes);
+	for(size_t i=0; i<flippedBits.size(); ++i)
+	{
+		codes[id] ^= uint64_t(1) << flippedBits[i];
+	}
+	uint64_t * originalCodes = family->codes;
+	family->codes = codes.data();
+	image_u8_t * im = apriltag_to_image(family, id);
+	family->codes = originalCodes;
+	const int totalWidth = family->total_width;
+	const int widthAtBorder = family->width_at_border;
+	f.destroy(family);
+
+	const int cell = 40; // rendered large, then warped down
+	cv::Mat marker;
+	cv::resize(cv::Mat(im->height, im->width, CV_8UC1, im->buf, im->stride), marker,
+			cv::Size(), cell, cell, cv::INTER_NEAREST);
+	image_u8_destroy(im);
+
+	// Tag size corners, in pixel-center coordinates: top-left, top-right,
+	// bottom-right, bottom-left; i.e. (-x,+y), (+x,+y), (+x,-y), (-x,-y) in the marker frame.
+	const float start = (totalWidth - widthAtBorder)/2 * cell - 0.5f;
+	const float end = start + widthAtBorder * cell;
+	const cv::Point2f src[4] = {
+			cv::Point2f(start, start),
+			cv::Point2f(end, start),
+			cv::Point2f(end, end),
+			cv::Point2f(start, end)};
+	const float corners[4][2] = {{-0.5f, 0.5f}, {0.5f, 0.5f}, {0.5f, -0.5f}, {-0.5f, -0.5f}};
+	const CameraModel model = testCameraModel();
+	cv::Point2f dst[4];
+	for(int i=0; i<4; ++i)
+	{
+		cv::Point3f p = util3d::transformPoint(cv::Point3f(corners[i][0], corners[i][1], 0), cameraToMarker);
+		dst[i].x = model.fx()*p.x/p.z + model.cx();
+		dst[i].y = model.fy()*p.y/p.z + model.cy();
+	}
+
+	cv::Mat image;
+	cv::warpPerspective(marker, image, cv::getPerspectiveTransform(src, dst),
+			cv::Size(kImageWidth, kImageHeight), cv::INTER_LINEAR, cv::BORDER_CONSTANT, cv::Scalar(255));
+	return image;
+}
+
+ParametersMap aprilTagLibParams(int dictionary, int maxHamming, int strategy = MarkerDetector::kStrategyApriltag, int upright = 0)
+{
+	ParametersMap params = markerParams(1.0f);
+	params.insert(ParametersPair(Parameters::kMarkerStrategy(), uNumber2Str(strategy)));
+	params.insert(ParametersPair(Parameters::kMarkerDictionary(), uNumber2Str(dictionary)));
+	params.insert(ParametersPair(Parameters::kMarkerAprilTagMaxHamming(), uNumber2Str(maxHamming)));
+	params.insert(ParametersPair(Parameters::kMarkerAprilTagUpright(), uNumber2Str(upright)));
+	return params;
+}
+
+// Marker of 1 m, off-center and tilted about each of its axes, 4 m ahead.
+Transform tiltedMarkerPose()
+{
+	const Transform facingCamera(
+			1,  0,  0, 0.4f,
+			0, -1,  0, -0.3f,
+			0,  0, -1, 4.0f);
+	return facingCamera * Transform(0, 0, 0, 20.0f*M_PI/180.0f, -25.0f*M_PI/180.0f, 30.0f*M_PI/180.0f);
+}
+
+// Marker of 1 m facing the camera, 3 m ahead: large enough to sample every bit cleanly.
+Transform frontalMarkerPose()
+{
+	return Transform(
+			1,  0,  0, 0,
+			0, -1,  0, 0,
+			0,  0, -1, 3);
+}
+#endif
+
+} // namespace
+
+TEST(MarkerDetectorTest, AprilTagLibOnlyDictionariesHaveOfficialFrameAndTagSize)
+{
+#ifndef RTABMAP_APRILTAG
+	GTEST_SKIP() << "RTAB-Map not built with the AprilTag library";
+#else
+	const Transform cameraToMarker = tiltedMarkerPose();
+	for(const AprilTagLibFamily & f : aprilTagLibOnlyFamilies())
+	{
+		const int id = familyCodes(f)/2;
+		const cv::Mat image = renderAprilTagLibMarkerAtPose(f, id, cameraToMarker);
+		// MarkerAprilTag/Upright doesn't apply: there is only the official image.
+		for(int upright=0; upright<=1; ++upright)
+		{
+			SCOPED_TRACE(uFormat("dictionary=%d id=%d upright=%d", f.dictionary, id, upright));
+			MarkerDetector detector(aprilTagLibParams(f.dictionary, 0, MarkerDetector::kStrategyApriltag, upright));
+			std::map<int, MarkerInfo> detections = detector.detect(image, testCameraModel());
+			ASSERT_EQ(detections.size(), 1u);
+			ASSERT_EQ(detections.count(id), 1u);
+			const Transform & pose = detections.at(id).pose();
+
+			EXPECT_LT(rotationErrorDeg(cameraToMarker, pose), 5.0f)
+					<< "expected " << cameraToMarker.prettyPrint() << ", got " << pose.prettyPrint();
+			// Marker/Length=1 is the tag size (not the whole tag image), so the
+			// marker is at the rendered distance.
+			EXPECT_LT((pose.toEigen3f().translation() - cameraToMarker.toEigen3f().translation()).norm(), 0.1f)
+					<< "expected " << cameraToMarker.prettyPrint() << ", got " << pose.prettyPrint();
+		}
+	}
+#endif
+}
+
+TEST(MarkerDetectorTest, AprilTagLibOnlyDictionaryWithOpenCVStrategyUsesAprilTagLib)
+{
+	// OpenCV has no such dictionary (it would detect nothing): the AprilTag
+	// library is used instead.
+	ParametersMap params;
+	params.insert(ParametersPair(Parameters::kMarkerStrategy(), uNumber2Str(MarkerDetector::kStrategyOpencv)));
+	params.insert(ParametersPair(Parameters::kMarkerDictionary(), uNumber2Str(MarkerDetector::kDictAprilTagStandard41h12)));
+#ifndef RTABMAP_APRILTAG
+	// Falls back to the default dictionary without crashing.
+	MarkerDetector detector(params);
+	EXPECT_TRUE(detector.detect(cv::Mat(kImageHeight, kImageWidth, CV_8UC1, cv::Scalar(255)), testCameraModel()).empty());
+#else
+	const AprilTagLibFamily f = aprilTagLibOnlyFamilies()[0];
+	ASSERT_EQ(f.dictionary, MarkerDetector::kDictAprilTagStandard41h12);
+	MarkerDetector detector(aprilTagLibParams(f.dictionary, 0, MarkerDetector::kStrategyOpencv));
+	std::map<int, MarkerInfo> detections = detector.detect(
+			renderAprilTagLibMarkerAtPose(f, 5, frontalMarkerPose()), testCameraModel());
+	ASSERT_EQ(detections.size(), 1u);
+	EXPECT_EQ(detections.count(5), 1u);
+
+	// Also when the strategy is changed afterwards.
+	ParametersMap opencv;
+	opencv.insert(ParametersPair(Parameters::kMarkerStrategy(), uNumber2Str(MarkerDetector::kStrategyOpencv)));
+	detector.parseParameters(opencv);
+	detections = detector.detect(renderAprilTagLibMarkerAtPose(f, 5, frontalMarkerPose()), testCameraModel());
+	ASSERT_EQ(detections.size(), 1u);
+	EXPECT_EQ(detections.count(5), 1u);
+#endif
+}
+
+TEST(MarkerDetectorTest, AprilTagMaxHammingSetsCorrectedBitErrors)
+{
+#ifndef RTABMAP_APRILTAG
+	GTEST_SKIP() << "RTAB-Map not built with the AprilTag library";
+#else
+	// tag36h11 (min Hamming distance 11): up to 2 bits can be corrected with
+	// every AprilTag library version.
+	const int id = 7;
+	const std::vector<int> bits = {3, 17, 30};
+	for(int maxHamming=0; maxHamming<=2; ++maxHamming)
+	{
+		MarkerDetector detector(aprilTagLibParams(kTag36h11.dictionary, maxHamming));
+		for(size_t errors=0; errors<=bits.size(); ++errors)
+		{
+			SCOPED_TRACE(uFormat("MaxHamming=%d bit errors=%d", maxHamming, (int)errors));
+			const cv::Mat image = renderAprilTagLibMarkerAtPose(kTag36h11, id, frontalMarkerPose(),
+					std::vector<int>(bits.begin(), bits.begin()+errors));
+			std::map<int, MarkerInfo> detections = detector.detect(image, testCameraModel());
+			if((int)errors <= maxHamming)
+			{
+				ASSERT_EQ(detections.size(), 1u);
+				EXPECT_EQ(detections.count(id), 1u);
+			}
+			else
+			{
+				EXPECT_TRUE(detections.empty());
+			}
+		}
+	}
+#endif
+}
+
+TEST(MarkerDetectorTest, AprilTagMaxHammingIsBoundedByLegacyDecoderMemory)
+{
+#ifndef RTABMAP_APRILTAG
+	GTEST_SKIP() << "RTAB-Map not built with the AprilTag library";
+#else
+	// tagStandard52h13 with 2 bits corrected: AprilTag library releases up to
+	// 3.4.5 would allocate a ~6.3 GB decoding table, so only 1 bit is corrected
+	// with them. Newer versions (compact decoder) correct 2 bits.
+	const AprilTagLibFamily f = aprilTagLibOnlyFamilies()[1];
+	ASSERT_EQ(f.dictionary, MarkerDetector::kDictAprilTagStandard52h13);
+	const int id = 12345;
+	MarkerDetector detector(aprilTagLibParams(f.dictionary, 2));
+
+	std::map<int, MarkerInfo> detections = detector.detect(
+			renderAprilTagLibMarkerAtPose(f, id, frontalMarkerPose(), {4}), testCameraModel());
+	ASSERT_EQ(detections.size(), 1u);
+	EXPECT_EQ(detections.count(id), 1u);
+
+	detections = detector.detect(
+			renderAprilTagLibMarkerAtPose(f, id, frontalMarkerPose(), {4, 40}), testCameraModel());
+#ifdef RTABMAP_APRILTAG_COMPACT_DECODER
+	ASSERT_EQ(detections.size(), 1u);
+	EXPECT_EQ(detections.count(id), 1u);
+#else
+	EXPECT_TRUE(detections.empty());
+#endif
 #endif
 }
